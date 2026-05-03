@@ -293,6 +293,23 @@ def write_wav_bytes(path: Path, wav_bytes: bytes) -> None:
         raise OSError(f"WAVファイルを書き込めません: {path}") from exc
 
 
+def synthesize_dialogue_wav(
+    event: DialogueEvent,
+    speaker_id: int,
+    base_url: str,
+    output_path: Path,
+) -> DialogueEvent:
+    """Synthesize one dialogue event and attach its WAV path and duration."""
+    audio_query = create_audio_query(base_url, event.voice_text, speaker_id)
+    wav_bytes = synthesize_wav(base_url, audio_query, speaker_id)
+    write_wav_bytes(output_path, wav_bytes)
+    wav_info = read_wav_info(output_path)
+
+    event.wav_path = output_path
+    event.duration_sec = wav_info.duration_sec
+    return event
+
+
 def _parse_silence_line(line: str, line_no: int) -> SilenceEvent | None:
     match = re.fullmatch(r"\(間\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\)", line)
     if match is None:

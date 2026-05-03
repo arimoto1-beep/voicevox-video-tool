@@ -21,6 +21,7 @@ from make_voicevox_assets import (
     read_wav_info,
     read_script_file,
     resolve_speaker_id,
+    synthesize_dialogue_wav,
     synthesize_wav,
     write_wav_bytes,
 )
@@ -548,3 +549,116 @@ def test_write_wav_bytes_write_failure_includes_path(monkeypatch: pytest.MonkeyP
         write_wav_bytes(wav_path, b"RIFF....WAVE")
 
     assert str(wav_path) in str(exc_info.value)
+
+
+def test_synthesize_dialogue_wav_uses_voice_text_and_sets_wav_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    event = DialogueEvent(
+        line_no=1,
+        speaker="metan",
+        voice_text="voice text",
+        subtitle_text="subtitle text",
+        params={},
+    )
+    output_path = tmp_path / "dialogue.wav"
+    calls: list[tuple] = []
+
+    def fake_create_audio_query(base_url: str, text: str, speaker_id: int) -> dict:
+        calls.append(("create_audio_query", base_url, text, speaker_id))
+        return {"speedScale": 1.0}
+
+    def fake_synthesize_wav(base_url: str, audio_query: dict, speaker_id: int) -> bytes:
+        calls.append(("synthesize_wav", base_url, audio_query, speaker_id))
+        return b"RIFF....WAVE"
+
+    def fake_write_wav_bytes(path: Path, wav_bytes: bytes) -> None:
+        calls.append(("write_wav_bytes", path, wav_bytes))
+
+    def fake_read_wav_info(path: Path) -> WavInfo:
+        calls.append(("read_wav_info", path))
+        return WavInfo(channels=1, sample_width=2, frame_rate=24000, frame_count=36000, duration_sec=1.5)
+
+    monkeypatch.setattr(make_voicevox_assets, "create_audio_query", fake_create_audio_query)
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_wav", fake_synthesize_wav)
+    monkeypatch.setattr(make_voicevox_assets, "write_wav_bytes", fake_write_wav_bytes)
+    monkeypatch.setattr(make_voicevox_assets, "read_wav_info", fake_read_wav_info)
+
+    result = synthesize_dialogue_wav(event, 2, "http://127.0.0.1:50021", output_path)
+
+    assert result is event
+    assert event.wav_path == output_path
+    assert event.duration_sec == 1.5
+    assert calls == [
+        ("create_audio_query", "http://127.0.0.1:50021", "voice text", 2),
+        ("synthesize_wav", "http://127.0.0.1:50021", {"speedScale": 1.0}, 2),
+        ("write_wav_bytes", output_path, b"RIFF....WAVE"),
+        ("read_wav_info", output_path),
+    ]
+
+
+def test_synthesize_dialogue_wav_create_audio_query_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    event = DialogueEvent(1, "metan", "voice text", "subtitle text", {})
+
+    def fake_create_audio_query(base_url: str, text: str, speaker_id: int) -> dict:
+        raise VoicevoxApiError("audio query failed")
+
+    monkeypatch.setattr(make_voicevox_assets, "create_audio_query", fake_create_audio_query)
+
+    with pytest.raises(VoicevoxApiError, match="audio query failed"):
+        synthesize_dialogue_wav(event, 2, "http://127.0.0.1:50021", tmp_path / "dialogue.wav")
+
+
+def test_synthesize_dialogue_wav_synthesize_wav_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    event = DialogueEvent(1, "metan", "voice text", "subtitle text", {})
+
+    def fake_synthesize_wav(base_url: str, audio_query: dict, speaker_id: int) -> bytes:
+        raise VoicevoxApiError("synthesis failed")
+
+    monkeypatch.setattr(make_voicevox_assets, "create_audio_query", lambda base_url, text, speaker_id: {})
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_wav", fake_synthesize_wav)
+
+    with pytest.raises(VoicevoxApiError, match="synthesis failed"):
+        synthesize_dialogue_wav(event, 2, "http://127.0.0.1:50021", tmp_path / "dialogue.wav")
+
+
+def test_synthesize_dialogue_wav_write_wav_bytes_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    event = DialogueEvent(1, "metan", "voice text", "subtitle text", {})
+
+    def fake_write_wav_bytes(path: Path, wav_bytes: bytes) -> None:
+        raise OSError("write failed")
+
+    monkeypatch.setattr(make_voicevox_assets, "create_audio_query", lambda base_url, text, speaker_id: {})
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_wav", lambda base_url, audio_query, speaker_id: b"wav")
+    monkeypatch.setattr(make_voicevox_assets, "write_wav_bytes", fake_write_wav_bytes)
+
+    with pytest.raises(OSError, match="write failed"):
+        synthesize_dialogue_wav(event, 2, "http://127.0.0.1:50021", tmp_path / "dialogue.wav")
+
+
+def test_synthesize_dialogue_wav_read_wav_info_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    event = DialogueEvent(1, "metan", "voice text", "subtitle text", {})
+
+    def fake_read_wav_info(path: Path) -> WavInfo:
+        raise ValueError("read failed")
+
+    monkeypatch.setattr(make_voicevox_assets, "create_audio_query", lambda base_url, text, speaker_id: {})
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_wav", lambda base_url, audio_query, speaker_id: b"wav")
+    monkeypatch.setattr(make_voicevox_assets, "write_wav_bytes", lambda path, wav_bytes: None)
+    monkeypatch.setattr(make_voicevox_assets, "read_wav_info", fake_read_wav_info)
+
+    with pytest.raises(ValueError, match="read failed"):
+        synthesize_dialogue_wav(event, 2, "http://127.0.0.1:50021", tmp_path / "dialogue.wav")

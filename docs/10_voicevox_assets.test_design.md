@@ -56,6 +56,11 @@
 | write_wav_bytes | 指定パスにWAVバイト列を書ける | `test_write_wav_bytes_writes_bytes_to_path` | 実装済み |
 | write_wav_bytes | 親ディレクトリがなければ作成する | `test_write_wav_bytes_creates_parent_directories` | 実装済み |
 | write_wav_bytes | 書き込み失敗時に対象パスが分かる例外になる | `test_write_wav_bytes_write_failure_includes_path` | 実装済み |
+| synthesize_dialogue_wav | 本物のVOICEVOX ENGINEには接続せず、`create_audio_query` / `synthesize_wav` / `write_wav_bytes` / `read_wav_info` をmonkeypatchで差し替え、`DialogueEvent.voice_text` を使って `create_audio_query` を呼び、指定した `output_path` とWAV長を同じ `DialogueEvent` の `wav_path` / `duration_sec` に設定して返す | `test_synthesize_dialogue_wav_uses_voice_text_and_sets_wav_metadata` | 実装済み |
+| synthesize_dialogue_wav | `create_audio_query` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wav_create_audio_query_error_propagates` | 実装済み |
+| synthesize_dialogue_wav | `synthesize_wav` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wav_synthesize_wav_error_propagates` | 実装済み |
+| synthesize_dialogue_wav | `write_wav_bytes` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wav_write_wav_bytes_error_propagates` | 実装済み |
+| synthesize_dialogue_wav | `read_wav_info` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wav_read_wav_info_error_propagates` | 実装済み |
 
 ## 2. 追加検討したいテスト観点
 
@@ -83,7 +88,6 @@
 | `話者.スタイル` 指定 | 初期実装の `resolve_speaker_id` では未対応であり、スタイル指定仕様が固まってから扱うため |
 | 複数スタイルの選択 | 初期実装では話者名一致時に先頭の `style id` を返す方針であり、選択ルールが未確定のため |
 | VOICEVOX実接続 | HTTP呼び出しはmonkeypatchで差し替えており、本物のVOICEVOX ENGINEへの接続は今回のテスト対象外のため |
-| `synthesize_dialogue_wav` | まだ1つの `DialogueEvent` に対する音声生成、WAV保存、WAV長取得、イベント更新を束ねる段階ではないため |
 | `synthesize_dialogue_wavs` | まだ複数イベントを処理して `DialogueEvent.wav_path` / `duration_sec` を設定する段階ではないため |
 | 効果音WAV読み込み | 実ファイルの音声処理は今回対象外のため |
 | WAV連結 | 今回の対象外であり、イベント列にgapを挿入するところまでを確認するため |
