@@ -67,6 +67,10 @@
 | synthesize_dialogue_wavs | `synthesize_dialogue_wav` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wavs_synthesize_dialogue_wav_error_propagates` | 実装済み |
 | attach_sound_effect_info | 実際の効果音WAVファイルには依存せず、`read_wav_info` をmonkeypatchで差し替え、複数の `SoundEffectEvent` の `path` を順番に `read_wav_info` へ渡し、取得した `duration_sec` を `SoundEffectEvent.duration_sec` に設定し、`DialogueEvent` と `SilenceEvent` は処理せずそのまま残し、イベント順を維持する | `test_attach_sound_effect_info_reads_wav_info_and_preserves_event_order` | 実装済み |
 | attach_sound_effect_info | `read_wav_info` で失敗した場合に例外が伝播する | `test_attach_sound_effect_info_read_wav_info_error_propagates` | 実装済み |
+| concatenate_wavs | `tmp_path` と `wave` で作成した小さいWAVを使い、外部ファイルに依存せず、`DialogueEvent.wav_path`、`SilenceEvent.duration_sec` の無音、`SoundEffectEvent.path` をイベント順に連結し、出力先の親ディレクトリを作成し、連結後の `WavInfo` を返し、出力WAVのフレーム順にイベント順が反映されることを確認する | `test_concatenate_wavs_concatenates_events_in_order_and_returns_wav_info` | 実装済み |
+| concatenate_wavs | WAV形式が一致しない場合に `ValueError` になる | `test_concatenate_wavs_mismatched_wav_format_raises_value_error` | 実装済み |
+| concatenate_wavs | `DialogueEvent.wav_path` が未設定の場合に `ValueError` になる | `test_concatenate_wavs_unset_dialogue_wav_path_raises_value_error` | 実装済み |
+| concatenate_wavs | 音声WAVが1つもない場合に `ValueError` になる | `test_concatenate_wavs_without_audio_wav_raises_value_error` | 実装済み |
 
 ## 2. 追加検討したいテスト観点
 
@@ -75,6 +79,7 @@
 | parse_script | `||` がない場合に `voice_text` と `subtitle_text` が同一になることを独立して確認する | 現在も全角コロンのテスト内で間接的に確認しているが、字幕分離仕様として独立していると意図が読みやすい | 中 |
 | parse_script | 効果音の相対パスが `script_dir` 基準で解決されることを明示的に確認する | 現在の効果音テストでも確認しているが、パス解決仕様として独立テスト化すると変更時に気づきやすい | 低 |
 | synthesize_dialogue_wavs | `DialogueEvent` が0件の場合に `resolve_speaker_id` / `synthesize_dialogue_wav` を呼ばず、非セリフイベントだけを同順で返すことを独立して確認する | 現在は混在イベントの成功系で非セリフイベントを確認しているが、セリフ0件の境界条件として切り出すと意図が読みやすい | 低 |
+| concatenate_wavs | 最初の音声WAVより前に `SilenceEvent` がある場合でも、基準WAV形式に合わせた無音として連結されることを独立して確認する | 現在の成功系は音声WAVの後に無音を置いて確認しているため、先頭無音の境界条件を分けると仕様が読みやすい | 低 |
 
 ## 3. 保留してよい観点
 
@@ -96,7 +101,12 @@
 | 複数スタイルの選択 | 初期実装では話者名一致時に先頭の `style id` を返す方針であり、選択ルールが未確定のため |
 | VOICEVOX実接続 | HTTP呼び出しはmonkeypatchで差し替えており、本物のVOICEVOX ENGINEへの接続は今回のテスト対象外のため |
 | 効果音WAVの加工・連結 | 実ファイルの音声加工や連結は今回対象外であり、`attach_sound_effect_info` では `read_wav_info` による長さ取得までを扱うため |
-| WAV連結 | 今回の対象外であり、イベント列にgapを挿入するところまでを確認するため |
 | SRT生成 | SRT時刻計算はWAV長取得後の工程であり、今回の対象外のため |
 | 動画生成 | 本機能の第1段階では扱わないため |
 | GUI化 | CLIまたは関数利用を前提としており、今回の対象外のため |
+
+## 5. 直近のpytest結果
+
+```text
+67 passed in 0.17s
+```

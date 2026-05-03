@@ -16,6 +16,7 @@ from make_voicevox_assets import (
     VoicevoxApiError,
     WavInfo,
     attach_sound_effect_info,
+    concatenate_wavs,
     create_audio_query,
     fetch_voicevox_speakers,
     insert_gap_events,
@@ -37,12 +38,13 @@ def _write_test_wav(
     sample_width: int = 2,
     frame_rate: int = 8000,
     frame_count: int = 1600,
+    frames: bytes | None = None,
 ) -> None:
     with wave.open(str(path), "wb") as wav_file:
         wav_file.setnchannels(channels)
         wav_file.setsampwidth(sample_width)
         wav_file.setframerate(frame_rate)
-        wav_file.writeframes(b"\x00" * channels * sample_width * frame_count)
+        wav_file.writeframes(frames if frames is not None else b"\x00" * channels * sample_width * frame_count)
 
 
 class _FakeHttpResponse:
@@ -824,3 +826,83 @@ def test_attach_sound_effect_info_read_wav_info_error_propagates(
 
     with pytest.raises(FileNotFoundError, match="missing wav"):
         attach_sound_effect_info([sound_effect])
+
+
+def test_concatenate_wavs_concatenates_events_in_order_and_returns_wav_info(tmp_path: Path) -> None:
+    first_dialogue_path = tmp_path / "dialogue1.wav"
+    sound_effect_path = tmp_path / "se.wav"
+    second_dialogue_path = tmp_path / "dialogue2.wav"
+    _write_test_wav(
+        first_dialogue_path,
+        channels=1,
+        sample_width=2,
+        frame_rate=10,
+        frame_count=2,
+        frames=b"\x01\x00" * 2,
+    )
+    _write_test_wav(
+        sound_effect_path,
+        channels=1,
+        sample_width=2,
+        frame_rate=10,
+        frame_count=1,
+        frames=b"\x02\x00",
+    )
+    _write_test_wav(
+        second_dialogue_path,
+        channels=1,
+        sample_width=2,
+        frame_rate=10,
+        frame_count=1,
+        frames=b"\x03\x00",
+    )
+    first_dialogue = DialogueEvent(1, "metan", "first", "first", {}, wav_path=first_dialogue_path)
+    silence = SilenceEvent(line_no=2, duration_sec=0.2, source="script")
+    sound_effect = SoundEffectEvent(3, sound_effect_path, {})
+    second_dialogue = DialogueEvent(4, "zundamon", "second", "second", {}, wav_path=second_dialogue_path)
+    events: list[ScriptEvent] = [first_dialogue, silence, sound_effect, second_dialogue]
+    output_path = tmp_path / "nested" / "all.wav"
+
+    info = concatenate_wavs(events, output_path)
+
+    assert output_path.is_file()
+    assert info == WavInfo(channels=1, sample_width=2, frame_rate=10, frame_count=6, duration_sec=0.6)
+    assert events == [first_dialogue, silence, sound_effect, second_dialogue]
+    with wave.open(str(output_path), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getframerate() == 10
+        assert wav_file.readframes(wav_file.getnframes()) == (
+            b"\x01\x00" * 2
+            + b"\x00\x00" * 2
+            + b"\x02\x00"
+            + b"\x03\x00"
+        )
+
+
+def test_concatenate_wavs_mismatched_wav_format_raises_value_error(tmp_path: Path) -> None:
+    first_path = tmp_path / "first.wav"
+    second_path = tmp_path / "second.wav"
+    _write_test_wav(first_path, channels=1, sample_width=2, frame_rate=8000, frame_count=1)
+    _write_test_wav(second_path, channels=1, sample_width=2, frame_rate=16000, frame_count=1)
+    events: list[ScriptEvent] = [
+        DialogueEvent(1, "metan", "first", "first", {}, wav_path=first_path),
+        DialogueEvent(2, "metan", "second", "second", {}, wav_path=second_path),
+    ]
+
+    with pytest.raises(ValueError, match="WAV形式が一致しません"):
+        concatenate_wavs(events, tmp_path / "all.wav")
+
+
+def test_concatenate_wavs_unset_dialogue_wav_path_raises_value_error(tmp_path: Path) -> None:
+    events: list[ScriptEvent] = [DialogueEvent(1, "metan", "voice", "subtitle", {})]
+
+    with pytest.raises(ValueError, match="wav_path"):
+        concatenate_wavs(events, tmp_path / "all.wav")
+
+
+def test_concatenate_wavs_without_audio_wav_raises_value_error(tmp_path: Path) -> None:
+    events: list[ScriptEvent] = [SilenceEvent(line_no=1, duration_sec=0.5, source="script")]
+
+    with pytest.raises(ValueError, match="音声WAVがありません"):
+        concatenate_wavs(events, tmp_path / "all.wav")

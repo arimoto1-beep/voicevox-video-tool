@@ -350,6 +350,29 @@ def attach_sound_effect_info(events: list[ScriptEvent]) -> list[ScriptEvent]:
     return result
 
 
+def concatenate_wavs(events: list[ScriptEvent], output_path: Path) -> WavInfo:
+    """Concatenate dialogue WAVs, sound effects, and silence into one WAV file."""
+    base_format = _find_base_wav_format(events)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with wave.open(str(output_path), "wb") as output_wav:
+        output_wav.setnchannels(base_format.channels)
+        output_wav.setsampwidth(base_format.sample_width)
+        output_wav.setframerate(base_format.frame_rate)
+
+        for event in events:
+            if isinstance(event, DialogueEvent):
+                if event.wav_path is None:
+                    raise ValueError("DialogueEvent.wav_path が未設定です")
+                _write_wav_file_frames(output_wav, event.wav_path, base_format)
+            elif isinstance(event, SilenceEvent):
+                output_wav.writeframes(_make_silence_frames(event.duration_sec, base_format))
+            elif isinstance(event, SoundEffectEvent):
+                _write_wav_file_frames(output_wav, event.path, base_format)
+
+    return read_wav_info(output_path)
+
+
 def _make_dialogue_wav_filename(index: int, event: DialogueEvent) -> str:
     speaker = _sanitize_filename_part(event.speaker, fallback="speaker", max_length=24)
     text = _sanitize_filename_part(event.voice_text, fallback="dialogue", max_length=32)
@@ -363,6 +386,41 @@ def _sanitize_filename_part(value: str, *, fallback: str, max_length: int) -> st
     if not safe:
         safe = fallback
     return safe[:max_length].rstrip("._ ") or fallback
+
+
+def _find_base_wav_format(events: list[ScriptEvent]) -> WavInfo:
+    for event in events:
+        if isinstance(event, DialogueEvent):
+            if event.wav_path is None:
+                raise ValueError("DialogueEvent.wav_path が未設定です")
+            return read_wav_info(event.wav_path)
+        if isinstance(event, SoundEffectEvent):
+            return read_wav_info(event.path)
+
+    raise ValueError("連結対象の音声WAVがありません")
+
+
+def _write_wav_file_frames(output_wav: wave.Wave_write, path: Path, base_format: WavInfo) -> None:
+    with wave.open(str(path), "rb") as input_wav:
+        channels = input_wav.getnchannels()
+        sample_width = input_wav.getsampwidth()
+        frame_rate = input_wav.getframerate()
+        if (
+            channels != base_format.channels
+            or sample_width != base_format.sample_width
+            or frame_rate != base_format.frame_rate
+        ):
+            raise ValueError(f"WAV形式が一致しません: {path}")
+
+        output_wav.writeframes(input_wav.readframes(input_wav.getnframes()))
+
+
+def _make_silence_frames(duration_sec: float, base_format: WavInfo) -> bytes:
+    frame_count = round(duration_sec * base_format.frame_rate)
+    bytes_per_frame = base_format.channels * base_format.sample_width
+    if base_format.sample_width == 1:
+        return b"\x80" * bytes_per_frame * frame_count
+    return b"\x00" * bytes_per_frame * frame_count
 
 
 def _parse_silence_line(line: str, line_no: int) -> SilenceEvent | None:
