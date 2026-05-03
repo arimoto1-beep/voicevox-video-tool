@@ -71,6 +71,14 @@ class WavInfo:
     duration_sec: float
 
 
+@dataclass
+class SrtCue:
+    index: int
+    start_sec: float
+    end_sec: float
+    text: str
+
+
 ScriptEvent: TypeAlias = DialogueEvent | SilenceEvent | SoundEffectEvent
 
 
@@ -371,6 +379,32 @@ def concatenate_wavs(events: list[ScriptEvent], output_path: Path) -> WavInfo:
                 _write_wav_file_frames(output_wav, event.path, base_format)
 
     return read_wav_info(output_path)
+
+
+def build_srt_cues(events: list[ScriptEvent]) -> list[SrtCue]:
+    """Build SRT cue data from dialogue events and accumulated durations."""
+    cues: list[SrtCue] = []
+    current_sec = 0.0
+
+    for event in events:
+        if isinstance(event, DialogueEvent):
+            if event.duration_sec is None:
+                raise ValueError("DialogueEvent.duration_sec が未設定です")
+            if not event.subtitle_text:
+                raise ValueError("DialogueEvent.subtitle_text が空です")
+
+            start_sec = current_sec
+            end_sec = current_sec + event.duration_sec
+            cues.append(SrtCue(index=len(cues) + 1, start_sec=start_sec, end_sec=end_sec, text=event.subtitle_text))
+            current_sec = end_sec
+        elif isinstance(event, SilenceEvent):
+            current_sec += event.duration_sec
+        elif isinstance(event, SoundEffectEvent):
+            if event.duration_sec is None:
+                raise ValueError("SoundEffectEvent.duration_sec が未設定です")
+            current_sec += event.duration_sec
+
+    return cues
 
 
 def _make_dialogue_wav_filename(index: int, event: DialogueEvent) -> str:

@@ -71,6 +71,10 @@
 | concatenate_wavs | WAV形式が一致しない場合に `ValueError` になる | `test_concatenate_wavs_mismatched_wav_format_raises_value_error` | 実装済み |
 | concatenate_wavs | `DialogueEvent.wav_path` が未設定の場合に `ValueError` になる | `test_concatenate_wavs_unset_dialogue_wav_path_raises_value_error` | 実装済み |
 | concatenate_wavs | 音声WAVが1つもない場合に `ValueError` になる | `test_concatenate_wavs_without_audio_wav_raises_value_error` | 実装済み |
+| build_srt_cues | `SrtCue(index, start_sec, end_sec, text)` を使い、`current_sec` を0.0から積み上げ、複数の `DialogueEvent` から字幕キューを作り、`DialogueEvent` だけを `SrtCue` にし、`SilenceEvent.duration_sec` と `SoundEffectEvent.duration_sec` を字幕時刻に反映し、`SrtCue.index` が1から連番になり、`start_sec` / `end_sec` がdurationの積み上げで決まり、`subtitle_text` が字幕テキストになることを確認する | `test_build_srt_cues_builds_dialogue_cues_from_accumulated_durations` | 実装済み |
+| build_srt_cues | `DialogueEvent.duration_sec` が未設定の場合に `ValueError` になる | `test_build_srt_cues_unset_dialogue_duration_raises_value_error` | 実装済み |
+| build_srt_cues | `SoundEffectEvent.duration_sec` が未設定の場合に `ValueError` になる | `test_build_srt_cues_unset_sound_effect_duration_raises_value_error` | 実装済み |
+| build_srt_cues | `subtitle_text` が空の場合に `ValueError` になる | `test_build_srt_cues_empty_subtitle_text_raises_value_error` | 実装済み |
 
 ## 2. 追加検討したいテスト観点
 
@@ -101,12 +105,12 @@
 | 複数スタイルの選択 | 初期実装では話者名一致時に先頭の `style id` を返す方針であり、選択ルールが未確定のため |
 | VOICEVOX実接続 | HTTP呼び出しはmonkeypatchで差し替えており、本物のVOICEVOX ENGINEへの接続は今回のテスト対象外のため |
 | 効果音WAVの加工・連結 | 実ファイルの音声加工や連結は今回対象外であり、`attach_sound_effect_info` では `read_wav_info` による長さ取得までを扱うため |
-| SRT生成 | SRT時刻計算はWAV長取得後の工程であり、今回の対象外のため |
+| SRTファイル書き出し | 今回は `SrtCue` の生成までが対象で、`.srt` ファイルへの整形・保存は後続工程で扱うため |
 | 動画生成 | 本機能の第1段階では扱わないため |
 | GUI化 | CLIまたは関数利用を前提としており、今回の対象外のため |
 
 ## 5. 直近のpytest結果
 
 ```text
-67 passed in 0.17s
+71 passed in 0.16s
 ```

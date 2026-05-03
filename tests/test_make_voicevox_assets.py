@@ -12,10 +12,12 @@ from make_voicevox_assets import (
     ScriptParseError,
     ScriptEvent,
     SilenceEvent,
+    SrtCue,
     SoundEffectEvent,
     VoicevoxApiError,
     WavInfo,
     attach_sound_effect_info,
+    build_srt_cues,
     concatenate_wavs,
     create_audio_query,
     fetch_voicevox_speakers,
@@ -906,3 +908,57 @@ def test_concatenate_wavs_without_audio_wav_raises_value_error(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="音声WAVがありません"):
         concatenate_wavs(events, tmp_path / "all.wav")
+
+
+def test_build_srt_cues_builds_dialogue_cues_from_accumulated_durations() -> None:
+    first = DialogueEvent(
+        line_no=1,
+        speaker="metan",
+        voice_text="voice 1",
+        subtitle_text="subtitle 1",
+        params={},
+        duration_sec=1.2,
+    )
+    silence = SilenceEvent(line_no=2, duration_sec=0.3, source="script")
+    sound_effect = SoundEffectEvent(line_no=3, path=Path("se.wav"), params={}, duration_sec=0.5)
+    second = DialogueEvent(
+        line_no=4,
+        speaker="zundamon",
+        voice_text="voice 2",
+        subtitle_text="subtitle 2",
+        params={},
+        duration_sec=0.7,
+    )
+    events: list[ScriptEvent] = [first, silence, sound_effect, second]
+
+    cues = build_srt_cues(events)
+
+    assert cues == [
+        SrtCue(index=1, start_sec=0.0, end_sec=1.2, text="subtitle 1"),
+        SrtCue(index=2, start_sec=2.0, end_sec=2.7, text="subtitle 2"),
+    ]
+    assert events == [first, silence, sound_effect, second]
+
+
+def test_build_srt_cues_unset_dialogue_duration_raises_value_error() -> None:
+    events: list[ScriptEvent] = [DialogueEvent(1, "metan", "voice", "subtitle", {})]
+
+    with pytest.raises(ValueError, match="DialogueEvent.duration_sec"):
+        build_srt_cues(events)
+
+
+def test_build_srt_cues_unset_sound_effect_duration_raises_value_error() -> None:
+    events: list[ScriptEvent] = [
+        DialogueEvent(1, "metan", "voice", "subtitle", {}, duration_sec=1.0),
+        SoundEffectEvent(2, Path("se.wav"), {}),
+    ]
+
+    with pytest.raises(ValueError, match="SoundEffectEvent.duration_sec"):
+        build_srt_cues(events)
+
+
+def test_build_srt_cues_empty_subtitle_text_raises_value_error() -> None:
+    events: list[ScriptEvent] = [DialogueEvent(1, "metan", "voice", "", {}, duration_sec=1.0)]
+
+    with pytest.raises(ValueError, match="subtitle_text"):
+        build_srt_cues(events)
