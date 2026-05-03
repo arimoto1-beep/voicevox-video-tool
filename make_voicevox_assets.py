@@ -1,0 +1,464 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TypeAlias
+import json
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+import wave
+
+
+DIALOGUE_PARAM_KEYS = {"speed", "pause"}
+SOUND_EFFECT_PARAM_KEYS = {"volume", "fade_in", "fade_out"}
+
+
+class ScriptParseError(ValueError):
+    """Raised when a script line cannot be parsed."""
+
+
+class VoicevoxApiError(RuntimeError):
+    """Raised when the VOICEVOX API cannot return usable data."""
+
+
+@dataclass
+class ScriptOptions:
+    script_path: Path
+    out_dir: Path
+    srt_path: Path
+    concat_path: Path
+    voicevox_url: str = "http://127.0.0.1:50021"
+    default_gap: float = 0.0
+    default_speed: float = 1.0
+    default_pause: float | None = None
+    speaker_aliases: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class DialogueEvent:
+    line_no: int
+    speaker: str
+    voice_text: str
+    subtitle_text: str
+    params: dict[str, str]
+    wav_path: Path | None = None
+    duration_sec: float | None = None
+
+
+@dataclass
+class SilenceEvent:
+    line_no: int | None
+    duration_sec: float
+    source: str
+
+
+@dataclass
+class SoundEffectEvent:
+    line_no: int
+    path: Path
+    params: dict[str, str]
+    duration_sec: float | None = None
+
+
+@dataclass
+class WavInfo:
+    channels: int
+    sample_width: int
+    frame_rate: int
+    frame_count: int
+    duration_sec: float
+
+
+ScriptEvent: TypeAlias = DialogueEvent | SilenceEvent | SoundEffectEvent
+
+
+def read_script_file(script_path: Path) -> list[str]:
+    """Read a UTF-8 script file and return lines without newline characters."""
+    if not script_path.exists():
+        raise FileNotFoundError(f"台本ファイルが見つかりません: {script_path}")
+    if not script_path.is_file():
+        raise OSError(f"台本ファイルではありません: {script_path}")
+
+    try:
+        return script_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise OSError(f"台本ファイルを読み込めません: {script_path}") from exc
+
+
+def parse_script(lines: list[str], script_dir: Path) -> list[ScriptEvent]:
+    """Parse script lines into dialogue, silence, and sound-effect events."""
+    events: list[ScriptEvent] = []
+    previous_speaker: str | None = None
+
+    for index, raw_line in enumerate(lines, start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        silence_event = _parse_silence_line(line, index)
+        if silence_event is not None:
+            events.append(silence_event)
+            continue
+
+        sound_effect_event = _parse_sound_effect_line(line, index, script_dir)
+        if sound_effect_event is not None:
+            events.append(sound_effect_event)
+            continue
+
+        dialogue_event = _parse_dialogue_line(line, index, previous_speaker)
+        previous_speaker = dialogue_event.speaker
+        events.append(dialogue_event)
+
+    return events
+
+
+def insert_gap_events(events: list[ScriptEvent], gap_sec: float) -> list[ScriptEvent]:
+    """Insert normal dialogue gaps as SilenceEvent(source="gap")."""
+    if gap_sec < 0:
+        raise ValueError(f"gap_sec は0以上で指定してください: {gap_sec}")
+    if gap_sec == 0:
+        return events
+
+    result: list[ScriptEvent] = []
+    for current, next_event in zip(events, events[1:]):
+        result.append(current)
+        # 初期実装では、通常gapは連続するセリフ同士の間だけに入れる。
+        # SEや明示的な間の前後にも入れると、台本で指定したタイミングと二重になりやすいため。
+        if isinstance(current, DialogueEvent) and isinstance(next_event, DialogueEvent):
+            result.append(SilenceEvent(line_no=None, duration_sec=gap_sec, source="gap"))
+
+    if events:
+        result.append(events[-1])
+
+    return result
+
+
+def read_wav_info(path: Path) -> WavInfo:
+    """Read WAV format information and duration from a WAV file."""
+    if not path.exists():
+        raise FileNotFoundError(f"WAVファイルが見つかりません: {path}")
+    if not path.is_file():
+        raise OSError(f"WAVファイルではありません: {path}")
+
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            channels = wav_file.getnchannels()
+            sample_width = wav_file.getsampwidth()
+            frame_rate = wav_file.getframerate()
+            frame_count = wav_file.getnframes()
+    except (wave.Error, EOFError) as exc:
+        raise ValueError(f"WAVファイルとして読み込めません: {path}") from exc
+    except OSError as exc:
+        raise OSError(f"WAVファイルを読み込めません: {path}") from exc
+
+    if frame_rate <= 0:
+        raise ValueError(f"WAVファイルのサンプリング周波数が不正です: {path}")
+
+    return WavInfo(
+        channels=channels,
+        sample_width=sample_width,
+        frame_rate=frame_rate,
+        frame_count=frame_count,
+        duration_sec=frame_count / frame_rate,
+    )
+
+
+def fetch_voicevox_speakers(base_url: str) -> list[dict]:
+    """Fetch speaker definitions from the VOICEVOX ENGINE /speakers API."""
+    speakers_url = f"{base_url.rstrip('/')}/speakers"
+
+    try:
+        with urllib.request.urlopen(speakers_url, timeout=10) as response:
+            status = getattr(response, "status", 200)
+            if status < 200 or status >= 300:
+                raise VoicevoxApiError(f"VOICEVOX /speakers の取得に失敗しました: HTTP {status}")
+            body = response.read()
+    except VoicevoxApiError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise VoicevoxApiError(f"VOICEVOX /speakers の取得に失敗しました: HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise VoicevoxApiError(f"VOICEVOXに接続できません: {speakers_url} ({exc.reason})") from exc
+    except OSError as exc:
+        raise VoicevoxApiError(f"VOICEVOXに接続できません: {speakers_url}") from exc
+
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VoicevoxApiError(f"VOICEVOX /speakers のJSONを解析できません: {speakers_url}") from exc
+
+    if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+        raise VoicevoxApiError(f"VOICEVOX /speakers のJSON形式が不正です: {speakers_url}")
+
+    return data
+
+
+def resolve_speaker_id(speaker_name: str, speakers: list[dict], aliases: dict[str, str]) -> int:
+    """Resolve a script speaker name to the first VOICEVOX style id."""
+    resolved_name = aliases.get(speaker_name, speaker_name)
+
+    for speaker in speakers:
+        if speaker.get("name") != resolved_name:
+            continue
+
+        styles = speaker.get("styles")
+        if not isinstance(styles, list) or not styles:
+            raise VoicevoxApiError(f"VOICEVOX話者 '{resolved_name}' に利用可能なスタイルがありません")
+
+        first_style = styles[0]
+        if not isinstance(first_style, dict) or "id" not in first_style:
+            raise VoicevoxApiError(f"VOICEVOX話者 '{resolved_name}' のstyle idを取得できません")
+
+        style_id = first_style["id"]
+        if not isinstance(style_id, int):
+            raise VoicevoxApiError(f"VOICEVOX話者 '{resolved_name}' のstyle idが不正です")
+
+        return style_id
+
+    raise VoicevoxApiError(f"VOICEVOX話者 '{speaker_name}' が見つかりません")
+
+
+def create_audio_query(base_url: str, text: str, speaker_id: int) -> dict:
+    """Create a VOICEVOX audio query for one dialogue text."""
+    query = urllib.parse.urlencode({"text": text, "speaker": speaker_id})
+    url = f"{base_url.rstrip('/')}/audio_query?{query}"
+    request = urllib.request.Request(url, data=b"", method="POST")
+
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status = getattr(response, "status", 200)
+            if status < 200 or status >= 300:
+                raise VoicevoxApiError(f"VOICEVOX /audio_query の作成に失敗しました: HTTP {status}")
+            body = response.read()
+    except VoicevoxApiError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise VoicevoxApiError(f"VOICEVOX /audio_query の作成に失敗しました: HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise VoicevoxApiError(f"VOICEVOXに接続できません: {url} ({exc.reason})") from exc
+    except OSError as exc:
+        raise VoicevoxApiError(f"VOICEVOXに接続できません: {url}") from exc
+
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VoicevoxApiError(f"VOICEVOX /audio_query のJSONを解析できません: {url}") from exc
+
+    if not isinstance(data, dict):
+        raise VoicevoxApiError(f"VOICEVOX /audio_query のJSON形式が不正です: {url}")
+
+    return data
+
+
+def synthesize_wav(base_url: str, audio_query: dict, speaker_id: int) -> bytes:
+    """Synthesize WAV bytes from a VOICEVOX audio query."""
+    query = urllib.parse.urlencode({"speaker": speaker_id})
+    url = f"{base_url.rstrip('/')}/synthesis?{query}"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(audio_query).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status = getattr(response, "status", 200)
+            if status < 200 or status >= 300:
+                raise VoicevoxApiError(f"VOICEVOX /synthesis に失敗しました: HTTP {status}")
+            wav_bytes = response.read()
+    except VoicevoxApiError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise VoicevoxApiError(f"VOICEVOX /synthesis に失敗しました: HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise VoicevoxApiError(f"VOICEVOXに接続できません: {url} ({exc.reason})") from exc
+    except OSError as exc:
+        raise VoicevoxApiError(f"VOICEVOXに接続できません: {url}") from exc
+
+    if not wav_bytes:
+        raise VoicevoxApiError(f"VOICEVOX /synthesis のレスポンスが空です: {url}")
+
+    return wav_bytes
+
+
+def write_wav_bytes(path: Path, wav_bytes: bytes) -> None:
+    """Write WAV bytes to a file, creating parent directories as needed."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(wav_bytes)
+    except OSError as exc:
+        raise OSError(f"WAVファイルを書き込めません: {path}") from exc
+
+
+def _parse_silence_line(line: str, line_no: int) -> SilenceEvent | None:
+    match = re.fullmatch(r"\(間\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\)", line)
+    if match is None:
+        if line.startswith("(間"):
+            raise ScriptParseError(f"{line_no}行目: 間の形式が不正です: {line}")
+        return None
+
+    duration_sec = _parse_non_negative_float(match.group(1), line_no, "間の秒数")
+    return SilenceEvent(line_no=line_no, duration_sec=duration_sec, source="script")
+
+
+def _parse_sound_effect_line(
+    line: str,
+    line_no: int,
+    script_dir: Path,
+) -> SoundEffectEvent | None:
+    body, params = _extract_inline_params(line, line_no)
+    match = re.fullmatch(r"\(SE\s+(.+)\)", body)
+    if match is None:
+        if body.startswith("(SE"):
+            raise ScriptParseError(f"{line_no}行目: 効果音の形式が不正です: {line}")
+        return None
+
+    _validate_params(params, SOUND_EFFECT_PARAM_KEYS, line_no)
+    raw_path = match.group(1).strip()
+    if not raw_path:
+        raise ScriptParseError(f"{line_no}行目: 効果音ファイルのパスが空です")
+
+    effect_path = Path(raw_path)
+    if not effect_path.is_absolute():
+        effect_path = script_dir / effect_path
+
+    return SoundEffectEvent(line_no=line_no, path=effect_path, params=params)
+
+
+def _parse_dialogue_line(
+    line: str,
+    line_no: int,
+    previous_speaker: str | None,
+) -> DialogueEvent:
+    body, params = _extract_inline_params(line, line_no)
+    _validate_params(params, DIALOGUE_PARAM_KEYS, line_no)
+
+    speaker, text = _split_speaker_and_text(body, previous_speaker, line_no)
+    voice_text, subtitle_text = _split_voice_and_subtitle_text(text, line_no)
+
+    return DialogueEvent(
+        line_no=line_no,
+        speaker=speaker,
+        voice_text=voice_text,
+        subtitle_text=subtitle_text,
+        params=params,
+    )
+
+
+def _extract_inline_params(text: str, line_no: int) -> tuple[str, dict[str, str]]:
+    stripped = text.strip()
+    if not stripped.endswith("}"):
+        if "{" in stripped or "}" in stripped:
+            raise ScriptParseError(f"{line_no}行目: 個別パラメータの形式が不正です: {text}")
+        return stripped, {}
+
+    start = stripped.rfind("{")
+    if start == -1:
+        raise ScriptParseError(f"{line_no}行目: 個別パラメータの形式が不正です: {text}")
+
+    body = stripped[:start].rstrip()
+    param_text = stripped[start + 1 : -1].strip()
+    params: dict[str, str] = {}
+    if not param_text:
+        return body, params
+
+    for item in param_text.split(","):
+        if "=" not in item:
+            raise ScriptParseError(f"{line_no}行目: 個別パラメータは key=value 形式で指定してください: {item.strip()}")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            raise ScriptParseError(f"{line_no}行目: 個別パラメータのキーまたは値が空です: {item.strip()}")
+        params[key] = value
+
+    return body, params
+
+
+def _validate_params(params: dict[str, str], allowed_keys: set[str], line_no: int) -> None:
+    for key in params:
+        if key not in allowed_keys:
+            allowed = ", ".join(sorted(allowed_keys))
+            raise ScriptParseError(f"{line_no}行目: 未対応の個別パラメータです: {key} (許可: {allowed})")
+
+
+def _split_speaker_and_text(
+    body: str,
+    previous_speaker: str | None,
+    line_no: int,
+) -> tuple[str, str]:
+    separator_positions = [pos for pos in (body.find("："), body.find(":")) if pos != -1]
+    if separator_positions:
+        pos = min(separator_positions)
+        speaker = body[:pos].strip()
+        text = body[pos + 1 :].strip()
+        if not speaker:
+            raise ScriptParseError(f"{line_no}行目: 話者名が空です")
+    else:
+        if previous_speaker is None:
+            raise ScriptParseError(f"{line_no}行目: 話者省略セリフの前に話者が存在しません")
+        speaker = previous_speaker
+        text = body.strip()
+
+    if not text:
+        raise ScriptParseError(f"{line_no}行目: セリフ本文が空です")
+
+    return speaker, text
+
+
+def _split_voice_and_subtitle_text(text: str, line_no: int) -> tuple[str, str]:
+    if "||" in text:
+        voice_text, subtitle_text = text.split("||", 1)
+        voice_text = voice_text.strip()
+        subtitle_text = subtitle_text.strip()
+    else:
+        voice_text = text.strip()
+        subtitle_text = text.strip()
+
+    if not voice_text:
+        raise ScriptParseError(f"{line_no}行目: 読み上げ用テキストが空です")
+    if not subtitle_text:
+        raise ScriptParseError(f"{line_no}行目: 字幕用テキストが空です")
+
+    return voice_text, subtitle_text
+
+
+def _parse_non_negative_float(value: str, line_no: int, label: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise ScriptParseError(f"{line_no}行目: {label}が数値ではありません: {value}") from exc
+
+    if number < 0:
+        raise ScriptParseError(f"{line_no}行目: {label}は0以上で指定してください: {value}")
+
+    return number
+
+
+if __name__ == "__main__":
+    sample_script = """\
+ずんだもん：印刷開始、うるさくないのだ？
+
+# コメント行は無視される
+めたん：あーそれ || あ、それ
+印刷開始の振動でしょ{speed=1.16}
+
+(間 0.25)
+
+(SE se\\pop.wav){volume=0.35}
+
+めたん：原因は、印刷開始時の振動ね
+"""
+
+    sample_lines = sample_script.splitlines()
+    parsed_events = parse_script(sample_lines, Path("."))
+    events_with_gap = insert_gap_events(parsed_events, gap_sec=0.08)
+
+    print("=== sample script ===")
+    print(sample_script)
+    print("=== parsed events with gap ===")
+    for event in events_with_gap:
+        print(event)
