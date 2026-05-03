@@ -21,6 +21,8 @@ from make_voicevox_assets import (
     concatenate_wavs,
     create_audio_query,
     fetch_voicevox_speakers,
+    format_srt,
+    format_srt_timestamp,
     insert_gap_events,
     parse_script,
     read_wav_info,
@@ -29,6 +31,7 @@ from make_voicevox_assets import (
     synthesize_dialogue_wav,
     synthesize_dialogue_wavs,
     synthesize_wav,
+    write_srt_file,
     write_wav_bytes,
 )
 
@@ -962,3 +965,69 @@ def test_build_srt_cues_empty_subtitle_text_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="subtitle_text"):
         build_srt_cues(events)
+
+
+def test_format_srt_timestamp_formats_zero_seconds() -> None:
+    assert format_srt_timestamp(0.0) == "00:00:00,000"
+
+
+def test_format_srt_timestamp_formats_seconds_and_milliseconds() -> None:
+    assert format_srt_timestamp(1.5) == "00:00:01,500"
+    assert format_srt_timestamp(1.2345) == "00:00:01,234"
+
+
+def test_format_srt_timestamp_formats_over_one_hour() -> None:
+    assert format_srt_timestamp(3661.234) == "01:01:01,234"
+
+
+def test_format_srt_timestamp_negative_seconds_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="seconds"):
+        format_srt_timestamp(-0.001)
+
+
+def test_format_srt_formats_multiple_cues_with_blank_lines_and_trailing_newline() -> None:
+    cues = [
+        SrtCue(index=1, start_sec=0.0, end_sec=1.5, text="こんにちは"),
+        SrtCue(index=2, start_sec=2.0, end_sec=3.0, text="次の字幕"),
+    ]
+
+    assert format_srt(cues) == (
+        "1\n"
+        "00:00:00,000 --> 00:00:01,500\n"
+        "こんにちは\n"
+        "\n"
+        "2\n"
+        "00:00:02,000 --> 00:00:03,000\n"
+        "次の字幕\n"
+    )
+
+
+def test_format_srt_end_before_start_raises_value_error() -> None:
+    cues = [SrtCue(index=1, start_sec=2.0, end_sec=1.0, text="subtitle")]
+
+    with pytest.raises(ValueError, match="end_sec"):
+        format_srt(cues)
+
+
+def test_format_srt_empty_text_raises_value_error() -> None:
+    cues = [SrtCue(index=1, start_sec=0.0, end_sec=1.0, text="")]
+
+    with pytest.raises(ValueError, match="text"):
+        format_srt(cues)
+
+
+def test_format_srt_empty_cues_returns_empty_string() -> None:
+    assert format_srt([]) == ""
+
+
+def test_write_srt_file_writes_utf8_srt_to_path(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "output.srt"
+    cues = [SrtCue(index=1, start_sec=0.0, end_sec=1.5, text="こんにちは")]
+
+    write_srt_file(path, cues)
+
+    assert path.read_text(encoding="utf-8") == (
+        "1\n"
+        "00:00:00,000 --> 00:00:01,500\n"
+        "こんにちは\n"
+    )

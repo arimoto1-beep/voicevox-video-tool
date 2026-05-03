@@ -75,6 +75,15 @@
 | build_srt_cues | `DialogueEvent.duration_sec` が未設定の場合に `ValueError` になる | `test_build_srt_cues_unset_dialogue_duration_raises_value_error` | 実装済み |
 | build_srt_cues | `SoundEffectEvent.duration_sec` が未設定の場合に `ValueError` になる | `test_build_srt_cues_unset_sound_effect_duration_raises_value_error` | 実装済み |
 | build_srt_cues | `subtitle_text` が空の場合に `ValueError` になる | `test_build_srt_cues_empty_subtitle_text_raises_value_error` | 実装済み |
+| format_srt_timestamp | 0秒を `00:00:00,000` に整形できる | `test_format_srt_timestamp_formats_zero_seconds` | 実装済み |
+| format_srt_timestamp | 秒とミリ秒をSRT時刻形式 `HH:MM:SS,mmm` に整形できる | `test_format_srt_timestamp_formats_seconds_and_milliseconds` | 実装済み |
+| format_srt_timestamp | 1時間を超える値をSRT時刻形式に整形できる | `test_format_srt_timestamp_formats_over_one_hour` | 実装済み |
+| format_srt_timestamp | 負数の場合に `ValueError` になる | `test_format_srt_timestamp_negative_seconds_raises_value_error` | 実装済み |
+| format_srt | 複数の `SrtCue` をSRT本文文字列に変換し、キュー間に空行を入れ、末尾を改行で終える | `test_format_srt_formats_multiple_cues_with_blank_lines_and_trailing_newline` | 実装済み |
+| format_srt | `end_sec` が `start_sec` より小さい場合に `ValueError` になる | `test_format_srt_end_before_start_raises_value_error` | 実装済み |
+| format_srt | `text` が空の場合に `ValueError` になる | `test_format_srt_empty_text_raises_value_error` | 実装済み |
+| format_srt | 空の `cues` を空文字列として扱う | `test_format_srt_empty_cues_returns_empty_string` | 実装済み |
+| write_srt_file | 親ディレクトリがなければ作成し、指定パスにUTF-8でSRTを書き出せる | `test_write_srt_file_writes_utf8_srt_to_path` | 実装済み |
 
 ## 2. 追加検討したいテスト観点
 
@@ -84,6 +93,7 @@
 | parse_script | 効果音の相対パスが `script_dir` 基準で解決されることを明示的に確認する | 現在の効果音テストでも確認しているが、パス解決仕様として独立テスト化すると変更時に気づきやすい | 低 |
 | synthesize_dialogue_wavs | `DialogueEvent` が0件の場合に `resolve_speaker_id` / `synthesize_dialogue_wav` を呼ばず、非セリフイベントだけを同順で返すことを独立して確認する | 現在は混在イベントの成功系で非セリフイベントを確認しているが、セリフ0件の境界条件として切り出すと意図が読みやすい | 低 |
 | concatenate_wavs | 最初の音声WAVより前に `SilenceEvent` がある場合でも、基準WAV形式に合わせた無音として連結されることを独立して確認する | 現在の成功系は音声WAVの後に無音を置いて確認しているため、先頭無音の境界条件を分けると仕様が読みやすい | 低 |
+| write_srt_file | 空の `cues` でも空のSRTファイルを書き出せることを独立して確認する | `format_srt([])` は空文字列として確認済みだが、ファイル書き出し側では空 `cues` をまだ直接確認していないため | 低 |
 
 ## 3. 保留してよい観点
 
@@ -105,12 +115,11 @@
 | 複数スタイルの選択 | 初期実装では話者名一致時に先頭の `style id` を返す方針であり、選択ルールが未確定のため |
 | VOICEVOX実接続 | HTTP呼び出しはmonkeypatchで差し替えており、本物のVOICEVOX ENGINEへの接続は今回のテスト対象外のため |
 | 効果音WAVの加工・連結 | 実ファイルの音声加工や連結は今回対象外であり、`attach_sound_effect_info` では `read_wav_info` による長さ取得までを扱うため |
-| SRTファイル書き出し | 今回は `SrtCue` の生成までが対象で、`.srt` ファイルへの整形・保存は後続工程で扱うため |
 | 動画生成 | 本機能の第1段階では扱わないため |
 | GUI化 | CLIまたは関数利用を前提としており、今回の対象外のため |
 
 ## 5. 直近のpytest結果
 
 ```text
-71 passed in 0.16s
+80 passed in 0.20s
 ```

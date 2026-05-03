@@ -407,6 +407,51 @@ def build_srt_cues(events: list[ScriptEvent]) -> list[SrtCue]:
     return cues
 
 
+def format_srt_timestamp(seconds: float) -> str:
+    """Format seconds as an SRT timestamp: HH:MM:SS,mmm."""
+    if seconds < 0:
+        raise ValueError(f"seconds は0以上で指定してください: {seconds}")
+
+    total_milliseconds = round(seconds * 1000)
+    milliseconds = total_milliseconds % 1000
+    total_seconds = total_milliseconds // 1000
+    second = total_seconds % 60
+    total_minutes = total_seconds // 60
+    minute = total_minutes % 60
+    hour = total_minutes // 60
+    return f"{hour:02d}:{minute:02d}:{second:02d},{milliseconds:03d}"
+
+
+def format_srt(cues: list[SrtCue]) -> str:
+    """Format SRT cues as an SRT file body."""
+    blocks: list[str] = []
+    for cue in cues:
+        if cue.end_sec < cue.start_sec:
+            raise ValueError(f"SrtCue.end_sec が start_sec より小さいです: {cue}")
+        if not cue.text:
+            raise ValueError("SrtCue.text が空です")
+
+        blocks.append(
+            "\n".join(
+                [
+                    str(cue.index),
+                    f"{format_srt_timestamp(cue.start_sec)} --> {format_srt_timestamp(cue.end_sec)}",
+                    cue.text,
+                ]
+            )
+        )
+
+    if not blocks:
+        return ""
+    return "\n\n".join(blocks) + "\n"
+
+
+def write_srt_file(path: Path, cues: list[SrtCue]) -> None:
+    """Write SRT cues to a UTF-8 encoded file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(format_srt(cues), encoding="utf-8")
+
+
 def _make_dialogue_wav_filename(index: int, event: DialogueEvent) -> str:
     speaker = _sanitize_filename_part(event.speaker, fallback="speaker", max_length=24)
     text = _sanitize_filename_part(event.voice_text, fallback="dialogue", max_length=32)
