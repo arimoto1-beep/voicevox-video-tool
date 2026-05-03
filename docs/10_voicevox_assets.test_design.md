@@ -65,6 +65,8 @@
 | synthesize_dialogue_wavs | 話者名やセリフにファイル名として使いにくい文字があっても `_` に置換された安全な名前になる | `test_synthesize_dialogue_wavs_sanitizes_output_filenames` | 実装済み |
 | synthesize_dialogue_wavs | `resolve_speaker_id` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wavs_resolve_speaker_id_error_propagates` | 実装済み |
 | synthesize_dialogue_wavs | `synthesize_dialogue_wav` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wavs_synthesize_dialogue_wav_error_propagates` | 実装済み |
+| attach_sound_effect_info | 実際の効果音WAVファイルには依存せず、`read_wav_info` をmonkeypatchで差し替え、複数の `SoundEffectEvent` の `path` を順番に `read_wav_info` へ渡し、取得した `duration_sec` を `SoundEffectEvent.duration_sec` に設定し、`DialogueEvent` と `SilenceEvent` は処理せずそのまま残し、イベント順を維持する | `test_attach_sound_effect_info_reads_wav_info_and_preserves_event_order` | 実装済み |
+| attach_sound_effect_info | `read_wav_info` で失敗した場合に例外が伝播する | `test_attach_sound_effect_info_read_wav_info_error_propagates` | 実装済み |
 
 ## 2. 追加検討したいテスト観点
 
@@ -93,7 +95,7 @@
 | `話者.スタイル` 指定 | 初期実装の `resolve_speaker_id` では未対応であり、スタイル指定仕様が固まってから扱うため |
 | 複数スタイルの選択 | 初期実装では話者名一致時に先頭の `style id` を返す方針であり、選択ルールが未確定のため |
 | VOICEVOX実接続 | HTTP呼び出しはmonkeypatchで差し替えており、本物のVOICEVOX ENGINEへの接続は今回のテスト対象外のため |
-| 効果音WAV読み込み | 実ファイルの音声処理は今回対象外のため |
+| 効果音WAVの加工・連結 | 実ファイルの音声加工や連結は今回対象外であり、`attach_sound_effect_info` では `read_wav_info` による長さ取得までを扱うため |
 | WAV連結 | 今回の対象外であり、イベント列にgapを挿入するところまでを確認するため |
 | SRT生成 | SRT時刻計算はWAV長取得後の工程であり、今回の対象外のため |
 | 動画生成 | 本機能の第1段階では扱わないため |

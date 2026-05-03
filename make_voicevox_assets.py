@@ -335,6 +335,21 @@ def synthesize_dialogue_wavs(
     return result
 
 
+def attach_sound_effect_info(events: list[ScriptEvent]) -> list[ScriptEvent]:
+    """Attach WAV duration information to sound-effect events."""
+    result: list[ScriptEvent] = []
+    for event in events:
+        if not isinstance(event, SoundEffectEvent):
+            result.append(event)
+            continue
+
+        wav_info = read_wav_info(event.path)
+        event.duration_sec = wav_info.duration_sec
+        result.append(event)
+
+    return result
+
+
 def _make_dialogue_wav_filename(index: int, event: DialogueEvent) -> str:
     speaker = _sanitize_filename_part(event.speaker, fallback="speaker", max_length=24)
     text = _sanitize_filename_part(event.voice_text, fallback="dialogue", max_length=32)

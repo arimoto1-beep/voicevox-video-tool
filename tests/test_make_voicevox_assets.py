@@ -15,6 +15,7 @@ from make_voicevox_assets import (
     SoundEffectEvent,
     VoicevoxApiError,
     WavInfo,
+    attach_sound_effect_info,
     create_audio_query,
     fetch_voicevox_speakers,
     insert_gap_events,
@@ -775,3 +776,51 @@ def test_synthesize_dialogue_wavs_synthesize_dialogue_wav_error_propagates(
 
     with pytest.raises(VoicevoxApiError, match="dialogue synthesis failed"):
         synthesize_dialogue_wavs([event], [], "http://127.0.0.1:50021", tmp_path, {})
+
+
+def test_attach_sound_effect_info_reads_wav_info_and_preserves_event_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dialogue = DialogueEvent(1, "metan", "voice text", "subtitle text", {})
+    first_sound_effect = SoundEffectEvent(2, Path("se/open.wav"), {})
+    silence = SilenceEvent(line_no=3, duration_sec=0.5, source="script")
+    second_sound_effect = SoundEffectEvent(4, Path("se/close.wav"), {})
+    events: list[ScriptEvent] = [dialogue, first_sound_effect, silence, second_sound_effect]
+    calls: list[Path] = []
+
+    def fake_read_wav_info(path: Path) -> WavInfo:
+        calls.append(path)
+        duration_sec = {
+            Path("se/open.wav"): 0.25,
+            Path("se/close.wav"): 0.75,
+        }[path]
+        return WavInfo(channels=2, sample_width=2, frame_rate=44100, frame_count=1, duration_sec=duration_sec)
+
+    monkeypatch.setattr(make_voicevox_assets, "read_wav_info", fake_read_wav_info)
+
+    result = attach_sound_effect_info(events)
+
+    assert result == [dialogue, first_sound_effect, silence, second_sound_effect]
+    assert result[0] is dialogue
+    assert result[1] is first_sound_effect
+    assert result[2] is silence
+    assert result[3] is second_sound_effect
+    assert calls == [Path("se/open.wav"), Path("se/close.wav")]
+    assert first_sound_effect.duration_sec == 0.25
+    assert second_sound_effect.duration_sec == 0.75
+    assert dialogue.duration_sec is None
+    assert silence.duration_sec == 0.5
+
+
+def test_attach_sound_effect_info_read_wav_info_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sound_effect = SoundEffectEvent(1, Path("missing.wav"), {})
+
+    def fake_read_wav_info(path: Path) -> WavInfo:
+        raise FileNotFoundError("missing wav")
+
+    monkeypatch.setattr(make_voicevox_assets, "read_wav_info", fake_read_wav_info)
+
+    with pytest.raises(FileNotFoundError, match="missing wav"):
+        attach_sound_effect_info([sound_effect])
