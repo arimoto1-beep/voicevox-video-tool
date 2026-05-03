@@ -310,6 +310,46 @@ def synthesize_dialogue_wav(
     return event
 
 
+def synthesize_dialogue_wavs(
+    events: list[ScriptEvent],
+    speakers: list[dict],
+    base_url: str,
+    out_dir: Path,
+    aliases: dict[str, str],
+) -> list[ScriptEvent]:
+    """Synthesize WAV files for dialogue events while preserving event order."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    result: list[ScriptEvent] = []
+    dialogue_index = 0
+    for event in events:
+        if not isinstance(event, DialogueEvent):
+            result.append(event)
+            continue
+
+        dialogue_index += 1
+        speaker_id = resolve_speaker_id(event.speaker, speakers, aliases)
+        output_path = out_dir / _make_dialogue_wav_filename(dialogue_index, event)
+        result.append(synthesize_dialogue_wav(event, speaker_id, base_url, output_path))
+
+    return result
+
+
+def _make_dialogue_wav_filename(index: int, event: DialogueEvent) -> str:
+    speaker = _sanitize_filename_part(event.speaker, fallback="speaker", max_length=24)
+    text = _sanitize_filename_part(event.voice_text, fallback="dialogue", max_length=32)
+    return f"{index:03d}_{speaker}_{text}.wav"
+
+
+def _sanitize_filename_part(value: str, *, fallback: str, max_length: int) -> str:
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", value)
+    safe = re.sub(r"\s+", "_", safe)
+    safe = re.sub(r"_+", "_", safe).strip("._ ")
+    if not safe:
+        safe = fallback
+    return safe[:max_length].rstrip("._ ") or fallback
+
+
 def _parse_silence_line(line: str, line_no: int) -> SilenceEvent | None:
     match = re.fullmatch(r"\(間\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\)", line)
     if match is None:

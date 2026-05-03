@@ -61,6 +61,10 @@
 | synthesize_dialogue_wav | `synthesize_wav` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wav_synthesize_wav_error_propagates` | 実装済み |
 | synthesize_dialogue_wav | `write_wav_bytes` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wav_write_wav_bytes_error_propagates` | 実装済み |
 | synthesize_dialogue_wav | `read_wav_info` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wav_read_wav_info_error_propagates` | 実装済み |
+| synthesize_dialogue_wavs | 本物のVOICEVOX ENGINEには接続せず、`resolve_speaker_id` / `synthesize_dialogue_wav` をmonkeypatchで差し替え、複数の `DialogueEvent` を順番に `synthesize_dialogue_wav` へ渡し、`SilenceEvent` と `SoundEffectEvent` は処理せずそのまま残し、イベント順を維持し、`out_dir` を作成し、出力ファイル名がセリフ単位で連番になることを確認する | `test_synthesize_dialogue_wavs_synthesizes_dialogues_and_preserves_other_events` | 実装済み |
+| synthesize_dialogue_wavs | 話者名やセリフにファイル名として使いにくい文字があっても `_` に置換された安全な名前になる | `test_synthesize_dialogue_wavs_sanitizes_output_filenames` | 実装済み |
+| synthesize_dialogue_wavs | `resolve_speaker_id` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wavs_resolve_speaker_id_error_propagates` | 実装済み |
+| synthesize_dialogue_wavs | `synthesize_dialogue_wav` で失敗した場合に例外が伝播する | `test_synthesize_dialogue_wavs_synthesize_dialogue_wav_error_propagates` | 実装済み |
 
 ## 2. 追加検討したいテスト観点
 
@@ -68,6 +72,7 @@
 |---|---|---|---|
 | parse_script | `||` がない場合に `voice_text` と `subtitle_text` が同一になることを独立して確認する | 現在も全角コロンのテスト内で間接的に確認しているが、字幕分離仕様として独立していると意図が読みやすい | 中 |
 | parse_script | 効果音の相対パスが `script_dir` 基準で解決されることを明示的に確認する | 現在の効果音テストでも確認しているが、パス解決仕様として独立テスト化すると変更時に気づきやすい | 低 |
+| synthesize_dialogue_wavs | `DialogueEvent` が0件の場合に `resolve_speaker_id` / `synthesize_dialogue_wav` を呼ばず、非セリフイベントだけを同順で返すことを独立して確認する | 現在は混在イベントの成功系で非セリフイベントを確認しているが、セリフ0件の境界条件として切り出すと意図が読みやすい | 低 |
 
 ## 3. 保留してよい観点
 
@@ -88,7 +93,6 @@
 | `話者.スタイル` 指定 | 初期実装の `resolve_speaker_id` では未対応であり、スタイル指定仕様が固まってから扱うため |
 | 複数スタイルの選択 | 初期実装では話者名一致時に先頭の `style id` を返す方針であり、選択ルールが未確定のため |
 | VOICEVOX実接続 | HTTP呼び出しはmonkeypatchで差し替えており、本物のVOICEVOX ENGINEへの接続は今回のテスト対象外のため |
-| `synthesize_dialogue_wavs` | まだ複数イベントを処理して `DialogueEvent.wav_path` / `duration_sec` を設定する段階ではないため |
 | 効果音WAV読み込み | 実ファイルの音声処理は今回対象外のため |
 | WAV連結 | 今回の対象外であり、イベント列にgapを挿入するところまでを確認するため |
 | SRT生成 | SRT時刻計算はWAV長取得後の工程であり、今回の対象外のため |

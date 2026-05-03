@@ -10,6 +10,7 @@ import make_voicevox_assets
 from make_voicevox_assets import (
     DialogueEvent,
     ScriptParseError,
+    ScriptEvent,
     SilenceEvent,
     SoundEffectEvent,
     VoicevoxApiError,
@@ -22,6 +23,7 @@ from make_voicevox_assets import (
     read_script_file,
     resolve_speaker_id,
     synthesize_dialogue_wav,
+    synthesize_dialogue_wavs,
     synthesize_wav,
     write_wav_bytes,
 )
@@ -662,3 +664,114 @@ def test_synthesize_dialogue_wav_read_wav_info_error_propagates(
 
     with pytest.raises(ValueError, match="read failed"):
         synthesize_dialogue_wav(event, 2, "http://127.0.0.1:50021", tmp_path / "dialogue.wav")
+
+
+def test_synthesize_dialogue_wavs_synthesizes_dialogues_and_preserves_other_events(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = DialogueEvent(1, "metan", "first voice", "first subtitle", {})
+    silence = SilenceEvent(line_no=2, duration_sec=0.5, source="script")
+    sound_effect = SoundEffectEvent(line_no=3, path=Path("se.wav"), params={})
+    second = DialogueEvent(4, "zundamon", "second voice", "second subtitle", {})
+    events: list[ScriptEvent] = [first, silence, sound_effect, second]
+    speakers = [{"name": "dummy"}]
+    aliases = {"metan": "四国めたん"}
+    calls: list[tuple] = []
+
+    def fake_resolve_speaker_id(speaker_name: str, speakers_arg: list[dict], aliases_arg: dict[str, str]) -> int:
+        calls.append(("resolve_speaker_id", speaker_name, speakers_arg, aliases_arg))
+        return {"metan": 2, "zundamon": 3}[speaker_name]
+
+    def fake_synthesize_dialogue_wav(
+        event: DialogueEvent,
+        speaker_id: int,
+        base_url: str,
+        output_path: Path,
+    ) -> DialogueEvent:
+        calls.append(("synthesize_dialogue_wav", event, speaker_id, base_url, output_path))
+        event.wav_path = output_path
+        event.duration_sec = float(speaker_id)
+        return event
+
+    monkeypatch.setattr(make_voicevox_assets, "resolve_speaker_id", fake_resolve_speaker_id)
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_dialogue_wav", fake_synthesize_dialogue_wav)
+
+    out_dir = tmp_path / "wav"
+    result = synthesize_dialogue_wavs(events, speakers, "http://127.0.0.1:50021", out_dir, aliases)
+
+    assert out_dir.is_dir()
+    assert result == [first, silence, sound_effect, second]
+    assert result[1] is silence
+    assert result[2] is sound_effect
+    assert first.wav_path == out_dir / "001_metan_first_voice.wav"
+    assert first.duration_sec == 2.0
+    assert second.wav_path == out_dir / "002_zundamon_second_voice.wav"
+    assert second.duration_sec == 3.0
+    assert calls == [
+        ("resolve_speaker_id", "metan", speakers, aliases),
+        ("synthesize_dialogue_wav", first, 2, "http://127.0.0.1:50021", out_dir / "001_metan_first_voice.wav"),
+        ("resolve_speaker_id", "zundamon", speakers, aliases),
+        ("synthesize_dialogue_wav", second, 3, "http://127.0.0.1:50021", out_dir / "002_zundamon_second_voice.wav"),
+    ]
+
+
+def test_synthesize_dialogue_wavs_sanitizes_output_filenames(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    event = DialogueEvent(1, 'me:ta/n', 'hello? / test* voice', "subtitle", {})
+    output_paths: list[Path] = []
+
+    monkeypatch.setattr(make_voicevox_assets, "resolve_speaker_id", lambda speaker_name, speakers, aliases: 2)
+
+    def fake_synthesize_dialogue_wav(
+        event: DialogueEvent,
+        speaker_id: int,
+        base_url: str,
+        output_path: Path,
+    ) -> DialogueEvent:
+        output_paths.append(output_path)
+        return event
+
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_dialogue_wav", fake_synthesize_dialogue_wav)
+
+    synthesize_dialogue_wavs([event], [], "http://127.0.0.1:50021", tmp_path, {})
+
+    assert output_paths == [tmp_path / "001_me_ta_n_hello_test_voice.wav"]
+
+
+def test_synthesize_dialogue_wavs_resolve_speaker_id_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    event = DialogueEvent(1, "metan", "voice text", "subtitle text", {})
+
+    def fake_resolve_speaker_id(speaker_name: str, speakers: list[dict], aliases: dict[str, str]) -> int:
+        raise VoicevoxApiError("speaker failed")
+
+    monkeypatch.setattr(make_voicevox_assets, "resolve_speaker_id", fake_resolve_speaker_id)
+
+    with pytest.raises(VoicevoxApiError, match="speaker failed"):
+        synthesize_dialogue_wavs([event], [], "http://127.0.0.1:50021", tmp_path, {})
+
+
+def test_synthesize_dialogue_wavs_synthesize_dialogue_wav_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    event = DialogueEvent(1, "metan", "voice text", "subtitle text", {})
+
+    def fake_synthesize_dialogue_wav(
+        event: DialogueEvent,
+        speaker_id: int,
+        base_url: str,
+        output_path: Path,
+    ) -> DialogueEvent:
+        raise VoicevoxApiError("dialogue synthesis failed")
+
+    monkeypatch.setattr(make_voicevox_assets, "resolve_speaker_id", lambda speaker_name, speakers, aliases: 2)
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_dialogue_wav", fake_synthesize_dialogue_wav)
+
+    with pytest.raises(VoicevoxApiError, match="dialogue synthesis failed"):
+        synthesize_dialogue_wavs([event], [], "http://127.0.0.1:50021", tmp_path, {})
