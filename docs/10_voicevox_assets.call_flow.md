@@ -2,36 +2,51 @@
 
 ## 1. エントリーポイント
 
-初期実装の中心となるエントリーポイントは以下とする。
+現在のCLI入口は `make_voicevox_assets.py` の `main` である。
 
 ```python
-run_voicevox_asset_pipeline(options: ScriptOptions) -> None
+if __name__ == "__main__":
+    raise SystemExit(main())
 ```
 
-CLI層では、コマンドライン引数を `ScriptOptions` に変換してから、この関数を1回呼び出す。
+CLIは正式な入口に近いが、まだ初期版である。alias設定ファイル、詳細ログ、dry-run、効果音加工、動画生成などは未実装。
 
-想定するCLIの流れは以下。
+実行例:
 
-1. `--script`、`--out_dir`、`--srt`、`--concat`、`--gap`、`--speed`、`--pause` などを受け取る。
-2. 引数を検証し、`ScriptOptions` を作る。
-3. `--show_speakers` が指定された場合は、VOICEVOX話者一覧を表示して終了する。
-4. 通常実行では `run_voicevox_asset_pipeline(options)` を呼ぶ。
-5. 例外が出た場合はCLI層で捕捉し、修正しやすいエラーメッセージを表示する。
+```powershell
+python make_voicevox_assets.py --script script.txt --out_dir wav --srt output.srt --concat all.wav --gap 0.08 --base_url http://127.0.0.1:50021
+```
 
 ---
 
-## 2. 全体の処理順序
-
-処理順序は以下で固定する。
+## 2. CLI実行時の全体フロー
 
 ```txt
+main
+  ↓
+parse_args
+  ↓
+generate_voicevox_assets
+  ↓
 read_script_file
   ↓
 parse_script
   ↓
 insert_gap_events
   ↓
+fetch_voicevox_speakers
+  ↓
 synthesize_dialogue_wavs
+  ↓
+synthesize_dialogue_wav
+  ↓
+create_audio_query
+  ↓
+synthesize_wav
+  ↓
+write_wav_bytes
+  ↓
+read_wav_info
   ↓
 attach_sound_effect_info
   ↓
@@ -40,631 +55,249 @@ concatenate_wavs
 build_srt_cues
   ↓
 write_srt_file
-  ↓
-print_summary
 ```
 
-重要な制約は以下。
+`synthesize_dialogue_wavs` はイベント列内の `DialogueEvent` ごとに `synthesize_dialogue_wav` を呼ぶ。
 
-- SRT生成は、VOICEVOXでセリフWAVを生成し、各セリフのWAV長を取得した後に行う。
-- 効果音の長さも、SRT生成前に取得しておく。
-- `gap` は `insert_gap_events` で `SilenceEvent` としてイベント列へ挿入する。
-- `concatenate_wavs` と `build_srt_cues` は、同じイベント列を参照する。
-- `concatenate_wavs` と `build_srt_cues` は `default_gap` を受け取らない。
-- `default_gap` を各関数で二重に加算しない。
+`synthesize_dialogue_wav` は1セリフ分のVOICEVOX query作成、synthesis、WAV保存、WAV長取得をまとめる。
 
 ---
 
-## 3. 各工程で使う関数
+## 3. main / parse_args
 
-### 3.1 台本ファイル読み込み
+### main
 
-#### 呼び出し
+`main(argv)` はCLI入口として以下を行う。
+
+1. `parse_args(argv)` で `ScriptOptions` を作る。
+2. `generate_voicevox_assets(options)` を呼ぶ。
+3. 成功時は以下を標準出力へ表示し、`0` を返す。
+
+```txt
+audio_path=...
+srt_path=...
+duration_sec=...
+```
+
+4. 例外時は `stderr` に `error: ...` を表示し、`1` を返す。
+
+### parse_args
+
+`parse_args(argv)` はCLI引数を `ScriptOptions` へ変換する。
+
+必須:
+
+- `--script`
+- `--out_dir`
+- `--srt`
+- `--concat`
+
+任意:
+
+- `--gap`。既定値は `0.08`
+- `--base_url`。既定値は `http://127.0.0.1:50021`
+
+---
+
+## 4. generate_voicevox_assets
+
+`generate_voicevox_assets(options)` は一式生成の本体統合関数である。
+
+処理順:
 
 ```python
 lines = read_script_file(options.script_path)
-```
-
-#### 役割
-
-台本ファイルをUTF-8テキストとして読み込み、行リストにする。
-
-#### 入力
-
-- `options.script_path`
-
-#### 出力
-
-- `lines: list[str]`
-
-#### この時点の状態
-
-まだイベント化はしない。
-
-コメント行、空行、セリフ行、間行、効果音行はすべて行テキストとして残っている。
-
----
-
-### 3.2 台本解析
-
-#### 呼び出し
-
-```python
 events = parse_script(lines, options.script_path.parent)
-```
-
-#### 役割
-
-台本行をイベント列へ変換する。
-
-#### 入力
-
-- `lines`
-- 台本ファイルのディレクトリ
-
-#### 出力
-
-- `events: list[ScriptEvent]`
-
-#### この工程で作るイベント
-
-- `DialogueEvent`
-- `SilenceEvent(source="script")`
-- `SoundEffectEvent`
-
-#### この工程で無視するもの
-
-- コメント行
-- 空行
-
-#### 注意
-
-この時点では、通常のセリフ間gapはまだ入れない。
-
----
-
-### 3.3 gapイベント挿入
-
-#### 呼び出し
-
-```python
 events = insert_gap_events(events, options.default_gap)
-```
-
-#### 役割
-
-`--gap` で指定された通常のセリフ間無音を、`SilenceEvent(source="gap")` としてイベント列へ挿入する。
-
-#### 入力
-
-- `events`
-- `options.default_gap`
-
-#### 出力
-
-- gap用の `SilenceEvent` が追加された `events`
-
-#### 注意
-
-この工程以降、gapは単なるイベントとして扱う。
-
-後続の `concatenate_wavs` と `build_srt_cues` は、gap秒数を自分で足さない。
-
----
-
-### 3.4 セリフWAV生成
-
-#### 呼び出し
-
-```python
-events = synthesize_dialogue_wavs(events, options)
-```
-
-#### 役割
-
-`DialogueEvent` ごとにVOICEVOX APIを呼び出し、個別WAVを生成する。
-
-#### 入力
-
-- gap挿入済みの `events`
-- `options`
-
-#### 出力
-
-- `DialogueEvent.wav_path`
-- `DialogueEvent.duration_sec`
-
-#### 内部で使う主な関数
-
-- `fetch_voicevox_speakers`
-- `resolve_speaker_id`
-- `read_wav_info`
-
-#### 注意
-
-SRTの時刻計算に必要なセリフ長は、この工程で取得する。
-
-台本の文字数や固定秒数から字幕時間を決めない。
-
----
-
-### 3.5 効果音WAV情報取得
-
-#### 呼び出し
-
-```python
+speakers = fetch_voicevox_speakers(options.voicevox_url)
+events = synthesize_dialogue_wavs(
+    events,
+    speakers,
+    options.voicevox_url,
+    options.out_dir,
+    aliases,
+)
 events = attach_sound_effect_info(events)
-```
-
-#### 役割
-
-`SoundEffectEvent` のWAVファイルを確認し、長さを取得する。
-
-#### 入力
-
-- セリフWAV情報が付与済みの `events`
-
-#### 出力
-
-- `SoundEffectEvent.duration_sec`
-
-#### 内部で使う主な関数
-
-- `read_wav_info`
-
-#### 注意
-
-効果音はSRT字幕としては出さない。
-
-ただし、効果音の長さは後続字幕の開始時刻に影響するため、SRT生成前に必ず取得する。
-
----
-
-### 3.6 全体WAV連結
-
-#### 呼び出し
-
-```python
-total_duration_sec = concatenate_wavs(events, options.concat_path)
-```
-
-#### 役割
-
-同じイベント列を台本順に処理し、全体音声WAVを生成する。
-
-#### 入力
-
-- gapを含み、WAV長さ情報が付与済みの `events`
-- `options.concat_path`
-
-#### 出力
-
-- `total_duration_sec`
-- 全体音声WAVファイル
-
-#### 連結対象
-
-- `DialogueEvent`: 生成済みセリフWAV
-- `SilenceEvent(source="script")`: 台本に明示された間
-- `SilenceEvent(source="gap")`: `--gap` から挿入された通常gap
-- `SoundEffectEvent`: 効果音WAV
-
-#### 注意
-
-この関数は `default_gap` を受け取らない。
-
-gapはすでに `SilenceEvent` としてイベント列に含まれている。
-
----
-
-### 3.7 SRT cue生成
-
-#### 呼び出し
-
-```python
+wav_info = concatenate_wavs(events, options.concat_path)
 cues = build_srt_cues(events)
+write_srt_file(options.srt_path, cues)
+return wav_info
 ```
 
-#### 役割
+aliasは初期実装では以下を使う。
 
-イベント列の長さを台本順に積み上げ、セリフ字幕の開始時刻と終了時刻を決める。
+```python
+{"めたん": "四国めたん", "ずんだもん": "ずんだもん"}
+```
 
-#### 入力
+`generate_voicevox_assets` は各工程の例外を握りつぶさない。CLI層の `main` が捕捉して `error: ...` と表示する。
 
-- `concatenate_wavs` と同じ `events`
+---
 
-#### 出力
+## 5. 台本読み込みからイベント列まで
 
-- `cues: list[SrtCue]`
+### read_script_file
 
-#### cueを作るイベント
+台本ファイルをUTF-8で読み、行リストを返す。
+
+この時点では、空行やコメント行も文字列として残る。
+
+### parse_script
+
+行リストをイベント列へ変換する。
+
+生成されるイベント:
 
 - `DialogueEvent`
-
-#### cueを作らないが時刻に反映するイベント
-
 - `SilenceEvent(source="script")`
-- `SilenceEvent(source="gap")`
 - `SoundEffectEvent`
 
-#### 注意
+無視される行:
 
-この関数も `default_gap` を受け取らない。
+- 空行
+- `#` で始まるコメント行
 
-SRT時刻は、セリフWAV長、効果音WAV長、間イベント秒数を同じイベント列から積み上げる。
+### insert_gap_events
+
+連続する `DialogueEvent` 同士の間に `SilenceEvent(source="gap")` を挿入する。
+
+この工程以降、通常gapはイベント列の一部として扱う。
 
 ---
 
-### 3.8 SRTファイル書き出し
+## 6. VOICEVOX音声生成
 
-#### 呼び出し
+### fetch_voicevox_speakers
 
-```python
-write_srt_file(cues, options.srt_path)
+VOICEVOX ENGINEの `/speakers` から話者一覧を取得する。
+
+### synthesize_dialogue_wavs
+
+イベント列を順番に見て、`DialogueEvent` だけを処理する。
+
+各セリフについて:
+
+1. `resolve_speaker_id` で話者名からstyle idを得る。
+2. 出力ファイル名を作る。
+3. `synthesize_dialogue_wav` を呼ぶ。
+
+`SilenceEvent` と `SoundEffectEvent` はそのまま残す。
+
+### synthesize_dialogue_wav
+
+1セリフ分のWAV生成を行う。
+
+```txt
+create_audio_query
+  ↓
+synthesize_wav
+  ↓
+write_wav_bytes
+  ↓
+read_wav_info
 ```
 
-#### 役割
+完了後、`DialogueEvent.wav_path` と `DialogueEvent.duration_sec` が設定される。
 
-SRT cue一覧をSRT形式に整形し、ファイルへ保存する。
+---
 
-#### 入力
+## 7. 効果音情報取得
 
-- `cues`
-- `options.srt_path`
+### attach_sound_effect_info
 
-#### 出力
+`SoundEffectEvent` の `path` を `read_wav_info` に渡し、`duration_sec` を設定する。
 
-- SRTファイル
+効果音なしの台本では、実質的にイベント列をそのまま返す。
 
-#### 注意
+現時点では、`volume`、`fade_in`、`fade_out` は音声へ反映しない。
+
+---
+
+## 8. WAV連結
+
+### concatenate_wavs
+
+イベント列を順番に処理して、全体WAVを作る。
+
+- `DialogueEvent`: `wav_path` のWAVを連結
+- `SilenceEvent`: `duration_sec` 分の無音を生成して連結
+- `SoundEffectEvent`: `path` のWAVを連結
+
+最初に登場した音声WAVの形式を基準にする。
+
+以下が一致しないWAVは `ValueError` になる。
+
+- チャンネル数
+- サンプル幅
+- サンプリング周波数
+
+戻り値は出力WAVの `WavInfo`。
+
+---
+
+## 9. SRT生成
+
+### build_srt_cues
+
+`current_sec` を `0.0` から積み上げる。
+
+- `DialogueEvent`: `SrtCue` を作る
+- `SilenceEvent`: 時刻だけ進める
+- `SoundEffectEvent`: 時刻だけ進める
 
 字幕本文には `DialogueEvent.subtitle_text` を使う。
 
-VOICEVOXへ渡した `voice_text` と同一とは限らない。
+### write_srt_file
+
+`SrtCue` のリストをSRT形式に整形し、UTF-8で書き出す。
+
+内部では以下を使う。
+
+- `format_srt`
+- `format_srt_timestamp`
 
 ---
 
-### 3.9 ログ表示
+## 10. pytestでの扱い
 
-#### 呼び出し
+pytestでは本物のVOICEVOX ENGINEへ接続しない。
 
-```python
-print_summary(
-    events=events,
-    concat_path=options.concat_path,
-    srt_path=options.srt_path,
-    total_duration_sec=total_duration_sec,
-    srt_count=len(cues),
-)
-```
+HTTPやファイル依存がある箇所は、以下のように差し替えて確認する。
 
-#### 役割
+- `urllib.request.urlopen` をmonkeypatchする
+- `create_audio_query` / `synthesize_wav` / `write_wav_bytes` / `read_wav_info` をmonkeypatchする
+- `resolve_speaker_id` / `synthesize_dialogue_wav` をmonkeypatchする
+- `generate_voicevox_assets` のテストでは各工程の関数をmonkeypatchする
+- CLIのテストでは `generate_voicevox_assets` をmonkeypatchする
 
-最低限の処理結果を標準出力へ表示する。
-
-#### 表示する情報
-
-- 読み込んだイベント数
-- 生成したセリフ音声数
-- 使用した効果音数
-- 出力した個別WAV件数
-- 全体音声ファイルの出力先
-- SRTファイルの出力先
-- 全体音声の長さ
-- SRT字幕件数
+WAV連結のテストでは、外部ファイルに依存せず、`tmp_path` と `wave` で小さいWAVを作る。
 
 ---
 
-## 4. イベント列の変化
+## 11. examples/manual_* の位置づけ
 
-### 4.1 台本読み込み直後
+`examples/manual_*` は手動確認用である。
 
-`read_script_file` の出力は、まだ文字列リスト。
+- `manual_voicevox_test.py`: VOICEVOX実接続で1セリフWAV生成を確認する。
+- `manual_concatenate_test.py`: 小さいWAVを作り、WAV連結を確認する。
+- `manual_srt_test.py`: `SrtCue` からSRT書き出しを確認する。
+- `manual_full_pipeline_test.py`: VOICEVOX実接続で短い台本からセリフWAV、全体WAV、SRTを生成する。
 
-```txt
-[
-  "ずんだもん：印刷開始、うるさくないのだ？",
-  "",
-  "めたん：あーそれ",
-  "印刷開始の振動でしょ",
-  "(間 0.25)",
-  "(SE se\\pop.wav)",
-  "めたん：原因は、印刷開始時の振動ね"
-]
-```
-
-### 4.2 parse_script 後
-
-コメント行と空行は消える。
-
-台本上の意味を持つ行だけがイベントになる。
-
-```txt
-[
-  DialogueEvent(line_no=1, speaker="ずんだもん", duration_sec=None, wav_path=None),
-  DialogueEvent(line_no=3, speaker="めたん", duration_sec=None, wav_path=None),
-  DialogueEvent(line_no=4, speaker="めたん", duration_sec=None, wav_path=None),
-  SilenceEvent(line_no=5, duration_sec=0.25, source="script"),
-  SoundEffectEvent(line_no=6, path="se\\pop.wav", duration_sec=None),
-  DialogueEvent(line_no=7, speaker="めたん", duration_sec=None, wav_path=None)
-]
-```
-
-### 4.3 insert_gap_events 後
-
-通常gapが `SilenceEvent(source="gap")` として挿入される。
-
-```txt
-[
-  DialogueEvent(line_no=1, duration_sec=None),
-  SilenceEvent(line_no=None, duration_sec=0.08, source="gap"),
-  DialogueEvent(line_no=3, duration_sec=None),
-  SilenceEvent(line_no=None, duration_sec=0.08, source="gap"),
-  DialogueEvent(line_no=4, duration_sec=None),
-  SilenceEvent(line_no=5, duration_sec=0.25, source="script"),
-  SoundEffectEvent(line_no=6, duration_sec=None),
-  DialogueEvent(line_no=7, duration_sec=None)
-]
-```
-
-実際にどこへgapを入れるかは `insert_gap_events` の仕様に従う。
-
-重要なのは、gapをこの段階でイベント化し、以降は追加加算しないこと。
-
-### 4.4 synthesize_dialogue_wavs 後
-
-セリフイベントに個別WAVパスとWAV長が入る。
-
-```txt
-[
-  DialogueEvent(line_no=1, wav_path="wav/001_ずんだもん_....wav", duration_sec=1.42),
-  SilenceEvent(source="gap", duration_sec=0.08),
-  DialogueEvent(line_no=3, wav_path="wav/002_めたん_....wav", duration_sec=0.74),
-  SilenceEvent(source="gap", duration_sec=0.08),
-  DialogueEvent(line_no=4, wav_path="wav/003_めたん_....wav", duration_sec=1.10),
-  SilenceEvent(source="script", duration_sec=0.25),
-  SoundEffectEvent(line_no=6, duration_sec=None),
-  DialogueEvent(line_no=7, wav_path="wav/004_めたん_....wav", duration_sec=1.35)
-]
-```
-
-### 4.5 attach_sound_effect_info 後
-
-効果音イベントにもWAV長が入る。
-
-```txt
-[
-  DialogueEvent(duration_sec=1.42),
-  SilenceEvent(source="gap", duration_sec=0.08),
-  DialogueEvent(duration_sec=0.74),
-  SilenceEvent(source="gap", duration_sec=0.08),
-  DialogueEvent(duration_sec=1.10),
-  SilenceEvent(source="script", duration_sec=0.25),
-  SoundEffectEvent(duration_sec=0.31),
-  DialogueEvent(duration_sec=1.35)
-]
-```
-
-この状態が、WAV連結とSRT生成で共有する完成イベント列になる。
-
-### 4.6 concatenate_wavs と build_srt_cues が見るイベント列
-
-両方とも同じ完成イベント列を見る。
-
-```txt
-completed_events
-  ├─ concatenate_wavs(completed_events, concat_path)
-  └─ build_srt_cues(completed_events)
-```
-
-ここで別々にgapを足したり、片方だけ効果音長を無視したりしない。
+これらは単体テストではなく、記事用・動作確認用のスクリプトである。
 
 ---
 
-## 5. SRT生成に必要な前提
+## 12. 初期CLIの制約
 
-`build_srt_cues(events)` を呼ぶ前に、以下が満たされている必要がある。
+CLIは一式生成の入口として動作するが、まだ初期版である。
 
-- `events` は `insert_gap_events` 済みである。
-- すべての `DialogueEvent` に `wav_path` が設定されている。
-- すべての `DialogueEvent` に `duration_sec` が設定されている。
-- すべての `SoundEffectEvent` に `duration_sec` が設定されている。
-- `SilenceEvent` は `duration_sec` を持っている。
-- `DialogueEvent.subtitle_text` が空でない。
-- SRT時刻計算に `default_gap` を追加で渡さない。
+現時点で未対応:
 
-SRT cueの作成ルールは以下。
-
-```txt
-current = 0.0
-
-for event in events:
-  if DialogueEvent:
-    start = current
-    end = current + event.duration_sec
-    cue = SrtCue(start, end, event.subtitle_text)
-    current = end
-
-  if SilenceEvent:
-    current += event.duration_sec
-
-  if SoundEffectEvent:
-    current += event.duration_sec
-```
-
-字幕として出るのは `DialogueEvent` だけ。
-
-ただし、`SilenceEvent` と `SoundEffectEvent` は時刻計算に必ず含める。
-
----
-
-## 6. エラー時の扱い
-
-### 6.1 基本方針
-
-各工程で発生したエラーは握りつぶさず、上位へ伝播する。
-
-CLI層で捕捉して、ユーザーが台本や環境を修正しやすい形で表示する。
-
-可能な限り以下を含める。
-
-- 台本の行番号
-- 該当する話者名
-- 該当するファイルパス
-- 失敗した工程
-- 修正の手がかり
-
-例。
-
-```txt
-5行目: 話者 'めたん' がVOICEVOX話者一覧に見つかりません
-```
-
-### 6.2 工程別の主なエラー
-
-#### read_script_file
-
-- 台本ファイルが存在しない
-- 台本ファイルを読み込めない
-
-#### parse_script
-
-- 話者省略セリフの前に話者が存在しない
-- 間の秒数が不正
-- 効果音パスが空
-- 個別パラメータ形式が不正
-- 未対応パラメータが指定された
-
-#### insert_gap_events
-
-- `gap_sec` が負数
-
-#### synthesize_dialogue_wavs
-
-- VOICEVOXに接続できない
-- 指定された話者が見つからない
-- audio query作成に失敗した
-- synthesisに失敗した
-- 個別WAVを書き込めない
-- 生成済みWAVの長さを取得できない
-
-#### attach_sound_effect_info
-
-- 効果音ファイルが存在しない
-- 効果音ファイルがWAV形式ではない
-- 効果音WAVの長さを取得できない
-- 初期実装で未対応の効果音パラメータが指定された
-
-#### concatenate_wavs
-
-- セリフWAVが存在しない
-- 効果音WAVが存在しない
-- WAV形式が一致しない
-- 全体WAVを書き込めない
-- セリフまたは効果音の `duration_sec` が未設定
-
-#### build_srt_cues
-
-- セリフWAV長が未設定
-- 効果音WAV長が未設定
-- 字幕文が空
-- 未知のイベント種別がある
-
-#### write_srt_file
-
-- SRT時刻範囲が不正
-- SRTファイルを書き込めない
-
----
-
-## 7. レビュー観点
-
-### 7.1 呼び出し順序
-
-- `build_srt_cues` が `synthesize_dialogue_wavs` より前に呼ばれていないか。
-- `build_srt_cues` が `attach_sound_effect_info` より前に呼ばれていないか。
-- `concatenate_wavs` と `build_srt_cues` が同じ完成イベント列を参照しているか。
-
-### 7.2 gapの扱い
-
-- `insert_gap_events` 以外で `default_gap` を加算していないか。
-- `concatenate_wavs` が `default_gap` を受け取っていないか。
-- `build_srt_cues` が `default_gap` を受け取っていないか。
-- gapが `SilenceEvent(source="gap")` としてイベント列に一度だけ入っているか。
-
-### 7.3 SRT時刻
-
-- SRT時刻が生成済みWAVの長さをもとに計算されているか。
-- 台本の文字数や固定秒数からセリフ表示時間を決めていないか。
-- 間と効果音がSRT本文には出ず、時刻計算には含まれているか。
-- 字幕本文に `subtitle_text` を使っているか。
-
-### 7.4 WAV連結
-
-- セリフ、間、gap、効果音がイベント列の順に連結されているか。
-- 効果音WAVの形式チェックが行われているか。
-- WAV形式が一致しない場合にエラーになるか。
-- 効果音の `volume`、`fade_in`、`fade_out` を初期実装で無理に加工していないか。
-
-### 7.5 エラー表示
-
-- 台本由来のエラーに行番号が含まれているか。
-- VOICEVOX接続失敗が分かりやすいか。
-- 話者未解決時に、どの話者が見つからなかったか分かるか。
-- ファイル入出力エラーで対象パスが表示されるか。
-
-### 7.6 対象外範囲
-
-- 動画生成をこの呼び出し構成に混ぜていないか。
-- 画像切り替えを実装対象にしていないか。
-- 字幕焼き込み、BGM追加、GUI化を混ぜていないか。
-
----
-
-## 8. 最小の擬似コード
-
-実装時の呼び出し形は、おおむね以下を想定する。
-
-```python
-def run_voicevox_asset_pipeline(options: ScriptOptions) -> None:
-    lines = read_script_file(options.script_path)
-
-    events = parse_script(
-        lines=lines,
-        script_dir=options.script_path.parent,
-    )
-
-    events = insert_gap_events(
-        events=events,
-        gap_sec=options.default_gap,
-    )
-
-    events = synthesize_dialogue_wavs(
-        events=events,
-        options=options,
-    )
-
-    events = attach_sound_effect_info(events)
-
-    total_duration_sec = concatenate_wavs(
-        events=events,
-        output_path=options.concat_path,
-    )
-
-    cues = build_srt_cues(events)
-
-    write_srt_file(
-        cues=cues,
-        srt_path=options.srt_path,
-    )
-
-    print_summary(
-        events=events,
-        concat_path=options.concat_path,
-        srt_path=options.srt_path,
-        total_duration_sec=total_duration_sec,
-        srt_count=len(cues),
-    )
-```
-
-この擬似コードでは、`events` が段階的に情報を持つようになり、最後の `events` を `concatenate_wavs` と `build_srt_cues` が共有する。
+- aliases設定ファイル
+- aliasesのCLI引数化
+- dry-run
+- 詳細ログ
+- 効果音の音量調整
+- `fade_in` / `fade_out`
+- `speed` / `pause` のVOICEVOX query反映
+- 動画生成
