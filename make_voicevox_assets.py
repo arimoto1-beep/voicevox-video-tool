@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeAlias
+import argparse
 import json
 import re
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,6 +15,7 @@ import wave
 
 DIALOGUE_PARAM_KEYS = {"speed", "pause"}
 SOUND_EFFECT_PARAM_KEYS = {"volume", "fade_in", "fade_out"}
+DEFAULT_SPEAKER_ALIASES = {"めたん": "四国めたん", "ずんだもん": "ずんだもん"}
 
 
 class ScriptParseError(ValueError):
@@ -452,6 +455,61 @@ def write_srt_file(path: Path, cues: list[SrtCue]) -> None:
     path.write_text(format_srt(cues), encoding="utf-8")
 
 
+def generate_voicevox_assets(options: ScriptOptions) -> WavInfo:
+    """Generate dialogue WAVs, concatenated audio, and an SRT file from a script."""
+    aliases = options.speaker_aliases or DEFAULT_SPEAKER_ALIASES
+
+    lines = read_script_file(options.script_path)
+    events = parse_script(lines, options.script_path.parent)
+    events = insert_gap_events(events, options.default_gap)
+    speakers = fetch_voicevox_speakers(options.voicevox_url)
+    events = synthesize_dialogue_wavs(events, speakers, options.voicevox_url, options.out_dir, aliases)
+    events = attach_sound_effect_info(events)
+    wav_info = concatenate_wavs(events, options.concat_path)
+    cues = build_srt_cues(events)
+    write_srt_file(options.srt_path, cues)
+    return wav_info
+
+
+def parse_args(argv: list[str] | None = None) -> ScriptOptions:
+    parser = argparse.ArgumentParser(description="Generate VOICEVOX audio and SRT assets from a script.")
+    parser.add_argument("--script", required=True, type=Path, help="Input script file path.")
+    parser.add_argument("--out_dir", required=True, type=Path, help="Output directory for dialogue WAV files.")
+    parser.add_argument("--srt", required=True, type=Path, help="Output SRT file path.")
+    parser.add_argument("--concat", required=True, type=Path, help="Output concatenated WAV file path.")
+    parser.add_argument("--gap", default=0.08, type=float, help="Gap seconds inserted between dialogues.")
+    parser.add_argument(
+        "--base_url",
+        default="http://127.0.0.1:50021",
+        help="VOICEVOX ENGINE base URL.",
+    )
+    args = parser.parse_args(argv)
+
+    return ScriptOptions(
+        script_path=args.script,
+        out_dir=args.out_dir,
+        srt_path=args.srt,
+        concat_path=args.concat,
+        voicevox_url=args.base_url,
+        default_gap=args.gap,
+        speaker_aliases=DEFAULT_SPEAKER_ALIASES.copy(),
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        options = parse_args(argv)
+        wav_info = generate_voicevox_assets(options)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"audio_path={options.concat_path.as_posix()}")
+    print(f"srt_path={options.srt_path.as_posix()}")
+    print(f"duration_sec={wav_info.duration_sec}")
+    return 0
+
+
 def _make_dialogue_wav_filename(index: int, event: DialogueEvent) -> str:
     speaker = _sanitize_filename_part(event.speaker, fallback="speaker", max_length=24)
     text = _sanitize_filename_part(event.voice_text, fallback="dialogue", max_length=32)
@@ -648,26 +706,4 @@ def _parse_non_negative_float(value: str, line_no: int, label: str) -> float:
 
 
 if __name__ == "__main__":
-    sample_script = """\
-ずんだもん：印刷開始、うるさくないのだ？
-
-# コメント行は無視される
-めたん：あーそれ || あ、それ
-印刷開始の振動でしょ{speed=1.16}
-
-(間 0.25)
-
-(SE se\\pop.wav){volume=0.35}
-
-めたん：原因は、印刷開始時の振動ね
-"""
-
-    sample_lines = sample_script.splitlines()
-    parsed_events = parse_script(sample_lines, Path("."))
-    events_with_gap = insert_gap_events(parsed_events, gap_sec=0.08)
-
-    print("=== sample script ===")
-    print(sample_script)
-    print("=== parsed events with gap ===")
-    for event in events_with_gap:
-        print(event)
+    raise SystemExit(main())

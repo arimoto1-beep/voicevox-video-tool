@@ -84,6 +84,9 @@
 | format_srt | `text` が空の場合に `ValueError` になる | `test_format_srt_empty_text_raises_value_error` | 実装済み |
 | format_srt | 空の `cues` を空文字列として扱う | `test_format_srt_empty_cues_returns_empty_string` | 実装済み |
 | write_srt_file | 親ディレクトリがなければ作成し、指定パスにUTF-8でSRTを書き出せる | `test_write_srt_file_writes_utf8_srt_to_path` | 実装済み |
+| generate_voicevox_assets | 本物のVOICEVOX ENGINEには接続せず、`read_script_file` / `parse_script` / `insert_gap_events` / `fetch_voicevox_speakers` / `synthesize_dialogue_wavs` / `attach_sound_effect_info` / `concatenate_wavs` / `build_srt_cues` / `write_srt_file` をmonkeypatchで差し替え、既存部品を正しい順番で呼び、`script_path`、`script_path.parent`、`default_gap`、`voicevox_url`、`out_dir`、`DEFAULT_SPEAKER_ALIASES`、`concat_path`、`srt_path` を主要引数として渡し、`concatenate_wavs` の `WavInfo` を返すことを確認する | `test_generate_voicevox_assets_calls_pipeline_functions_in_order` | 実装済み |
+| main | CLI引数から `ScriptOptions` を作り、`generate_voicevox_assets` を呼び、成功時に終了コード0を返し、`audio_path` / `srt_path` / `duration_sec` を表示する | `test_main_builds_script_options_and_returns_zero_on_success` | 実装済み |
+| main | `generate_voicevox_assets` が例外を投げた場合に終了コード1を返し、stderrへ `error: ...` を表示する | `test_main_returns_one_when_generate_voicevox_assets_raises` | 実装済み |
 
 ## 2. 追加検討したいテスト観点
 
@@ -94,6 +97,8 @@
 | synthesize_dialogue_wavs | `DialogueEvent` が0件の場合に `resolve_speaker_id` / `synthesize_dialogue_wav` を呼ばず、非セリフイベントだけを同順で返すことを独立して確認する | 現在は混在イベントの成功系で非セリフイベントを確認しているが、セリフ0件の境界条件として切り出すと意図が読みやすい | 低 |
 | concatenate_wavs | 最初の音声WAVより前に `SilenceEvent` がある場合でも、基準WAV形式に合わせた無音として連結されることを独立して確認する | 現在の成功系は音声WAVの後に無音を置いて確認しているため、先頭無音の境界条件を分けると仕様が読みやすい | 低 |
 | write_srt_file | 空の `cues` でも空のSRTファイルを書き出せることを独立して確認する | `format_srt([])` は空文字列として確認済みだが、ファイル書き出し側では空 `cues` をまだ直接確認していないため | 低 |
+| parse_args | `--gap` と `--base_url` を省略した場合に既定値 `0.08` と `http://127.0.0.1:50021` が使われることを独立して確認する | 現在は `main` 経由で指定値の反映を確認しているが、既定値は独立テスト化するとCLI仕様が読みやすい | 中 |
+| parse_args | 必須引数が不足した場合に argparse のエラーになることを確認する | 現在は正常系のCLI引数のみ確認しているため、CLI入口の基本的な失敗条件として確認余地がある | 低 |
 
 ## 3. 保留してよい観点
 
@@ -121,5 +126,5 @@
 ## 5. 直近のpytest結果
 
 ```text
-80 passed in 0.20s
+83 passed in 0.26s
 ```

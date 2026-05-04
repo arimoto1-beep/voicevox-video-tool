@@ -23,11 +23,14 @@ from make_voicevox_assets import (
     fetch_voicevox_speakers,
     format_srt,
     format_srt_timestamp,
+    generate_voicevox_assets,
     insert_gap_events,
+    main,
     parse_script,
     read_wav_info,
     read_script_file,
     resolve_speaker_id,
+    ScriptOptions,
     synthesize_dialogue_wav,
     synthesize_dialogue_wavs,
     synthesize_wav,
@@ -1031,3 +1034,157 @@ def test_write_srt_file_writes_utf8_srt_to_path(tmp_path: Path) -> None:
         "00:00:00,000 --> 00:00:01,500\n"
         "こんにちは\n"
     )
+
+
+def test_generate_voicevox_assets_calls_pipeline_functions_in_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    options = ScriptOptions(
+        script_path=tmp_path / "script.txt",
+        out_dir=tmp_path / "wav",
+        srt_path=tmp_path / "output.srt",
+        concat_path=tmp_path / "all.wav",
+        voicevox_url="http://127.0.0.1:50021",
+        default_gap=0.08,
+    )
+    lines = ["metan: hello"]
+    parsed_events: list[ScriptEvent] = [DialogueEvent(1, "metan", "hello", "hello", {})]
+    gapped_events: list[ScriptEvent] = parsed_events + [SilenceEvent(None, 0.08, "gap")]
+    synthesized_events: list[ScriptEvent] = gapped_events
+    sound_effect_events: list[ScriptEvent] = synthesized_events
+    speakers = [{"name": "四国めたん", "styles": [{"id": 2}]}]
+    cues = [SrtCue(1, 0.0, 1.0, "hello")]
+    wav_info = WavInfo(channels=1, sample_width=2, frame_rate=24000, frame_count=24000, duration_sec=1.0)
+    calls: list[tuple] = []
+
+    def fake_read_script_file(script_path: Path) -> list[str]:
+        calls.append(("read_script_file", script_path))
+        return lines
+
+    def fake_parse_script(lines_arg: list[str], script_dir: Path) -> list[ScriptEvent]:
+        calls.append(("parse_script", lines_arg, script_dir))
+        return parsed_events
+
+    def fake_insert_gap_events(events: list[ScriptEvent], gap_sec: float) -> list[ScriptEvent]:
+        calls.append(("insert_gap_events", events, gap_sec))
+        return gapped_events
+
+    def fake_fetch_voicevox_speakers(base_url: str) -> list[dict]:
+        calls.append(("fetch_voicevox_speakers", base_url))
+        return speakers
+
+    def fake_synthesize_dialogue_wavs(
+        events: list[ScriptEvent],
+        speakers_arg: list[dict],
+        base_url: str,
+        out_dir: Path,
+        aliases: dict[str, str],
+    ) -> list[ScriptEvent]:
+        calls.append(("synthesize_dialogue_wavs", events, speakers_arg, base_url, out_dir, aliases))
+        return synthesized_events
+
+    def fake_attach_sound_effect_info(events: list[ScriptEvent]) -> list[ScriptEvent]:
+        calls.append(("attach_sound_effect_info", events))
+        return sound_effect_events
+
+    def fake_concatenate_wavs(events: list[ScriptEvent], output_path: Path) -> WavInfo:
+        calls.append(("concatenate_wavs", events, output_path))
+        return wav_info
+
+    def fake_build_srt_cues(events: list[ScriptEvent]) -> list[SrtCue]:
+        calls.append(("build_srt_cues", events))
+        return cues
+
+    def fake_write_srt_file(path: Path, cues_arg: list[SrtCue]) -> None:
+        calls.append(("write_srt_file", path, cues_arg))
+
+    monkeypatch.setattr(make_voicevox_assets, "read_script_file", fake_read_script_file)
+    monkeypatch.setattr(make_voicevox_assets, "parse_script", fake_parse_script)
+    monkeypatch.setattr(make_voicevox_assets, "insert_gap_events", fake_insert_gap_events)
+    monkeypatch.setattr(make_voicevox_assets, "fetch_voicevox_speakers", fake_fetch_voicevox_speakers)
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_dialogue_wavs", fake_synthesize_dialogue_wavs)
+    monkeypatch.setattr(make_voicevox_assets, "attach_sound_effect_info", fake_attach_sound_effect_info)
+    monkeypatch.setattr(make_voicevox_assets, "concatenate_wavs", fake_concatenate_wavs)
+    monkeypatch.setattr(make_voicevox_assets, "build_srt_cues", fake_build_srt_cues)
+    monkeypatch.setattr(make_voicevox_assets, "write_srt_file", fake_write_srt_file)
+
+    result = generate_voicevox_assets(options)
+
+    assert result is wav_info
+    assert calls == [
+        ("read_script_file", options.script_path),
+        ("parse_script", lines, options.script_path.parent),
+        ("insert_gap_events", parsed_events, 0.08),
+        ("fetch_voicevox_speakers", "http://127.0.0.1:50021"),
+        (
+            "synthesize_dialogue_wavs",
+            gapped_events,
+            speakers,
+            "http://127.0.0.1:50021",
+            options.out_dir,
+            make_voicevox_assets.DEFAULT_SPEAKER_ALIASES,
+        ),
+        ("attach_sound_effect_info", synthesized_events),
+        ("concatenate_wavs", sound_effect_events, options.concat_path),
+        ("build_srt_cues", sound_effect_events),
+        ("write_srt_file", options.srt_path, cues),
+    ]
+
+
+def test_main_builds_script_options_and_returns_zero_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured_options: list[ScriptOptions] = []
+
+    def fake_generate_voicevox_assets(options: ScriptOptions) -> WavInfo:
+        captured_options.append(options)
+        return WavInfo(channels=1, sample_width=2, frame_rate=24000, frame_count=36000, duration_sec=1.5)
+
+    monkeypatch.setattr(make_voicevox_assets, "generate_voicevox_assets", fake_generate_voicevox_assets)
+
+    exit_code = main(
+        [
+            "--script",
+            "script.txt",
+            "--out_dir",
+            "wav",
+            "--srt",
+            "output.srt",
+            "--concat",
+            "all.wav",
+            "--gap",
+            "0.08",
+            "--base_url",
+            "http://127.0.0.1:50021",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured_options == [
+        ScriptOptions(
+            script_path=Path("script.txt"),
+            out_dir=Path("wav"),
+            srt_path=Path("output.srt"),
+            concat_path=Path("all.wav"),
+            voicevox_url="http://127.0.0.1:50021",
+            default_gap=0.08,
+            speaker_aliases=make_voicevox_assets.DEFAULT_SPEAKER_ALIASES,
+        )
+    ]
+    assert capsys.readouterr().out == "audio_path=all.wav\nsrt_path=output.srt\nduration_sec=1.5\n"
+
+
+def test_main_returns_one_when_generate_voicevox_assets_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_generate_voicevox_assets(options: ScriptOptions) -> WavInfo:
+        raise VoicevoxApiError("VOICEVOXに接続できません")
+
+    monkeypatch.setattr(make_voicevox_assets, "generate_voicevox_assets", fake_generate_voicevox_assets)
+
+    exit_code = main(["--script", "script.txt", "--out_dir", "wav", "--srt", "output.srt", "--concat", "all.wav"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert captured.err == "error: VOICEVOXに接続できません\n"
