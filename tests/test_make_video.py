@@ -4,15 +4,27 @@ import pytest
 
 import make_video
 from make_video import (
+    AssSubtitleStyle,
+    SubtitleCue,
     VideoLayout,
     VideoOptions,
+    build_ass_content,
+    build_ass_filter,
     build_cover_filter,
     build_ffmpeg_command,
+    build_video_filter,
+    escape_ass_text,
+    escape_path_for_ffmpeg_filter,
+    format_ass_time,
     generate_video,
+    get_ass_subtitle_style,
     get_video_layout,
     main,
     parse_args,
+    parse_srt_file,
+    parse_srt_time,
     run_ffmpeg,
+    write_ass_file,
 )
 
 
@@ -82,6 +94,20 @@ def test_build_ffmpeg_command_builds_expected_arguments() -> None:
     assert command[-1] == "output.mp4"
 
 
+def test_build_ffmpeg_command_uses_ass_video_filter_when_ass_path_is_given() -> None:
+    options = VideoOptions(
+        audio_path=Path("all.wav"),
+        background_path=Path("background.png"),
+        output_path=Path("output.mp4"),
+    )
+    layout = get_video_layout("short")
+
+    command = build_ffmpeg_command(options, layout, ass_path=Path("tmp/video/output.ass"))
+
+    assert command[command.index("-vf") + 1] == build_video_filter(layout, Path("tmp/video/output.ass"))
+    assert "ass=tmp/video/output.ass" in command[command.index("-vf") + 1]
+
+
 def test_run_ffmpeg_calls_subprocess_run(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[list[str], bool]] = []
 
@@ -130,6 +156,156 @@ def test_generate_video_does_not_swallow_unknown_layout(tmp_path: Path) -> None:
         generate_video(options)
 
 
+def test_get_ass_subtitle_style_returns_short_style() -> None:
+    style = get_ass_subtitle_style(get_video_layout("short"))
+
+    assert style == AssSubtitleStyle(
+        font_name="Arial",
+        font_size=72,
+        margin_v=140,
+        outline=5,
+        shadow=1,
+        alignment=2,
+    )
+
+
+def test_get_ass_subtitle_style_returns_normal_style() -> None:
+    style = get_ass_subtitle_style(get_video_layout("normal"))
+
+    assert style == AssSubtitleStyle(
+        font_name="Arial",
+        font_size=56,
+        margin_v=80,
+        outline=4,
+        shadow=1,
+        alignment=2,
+    )
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0.0, "0:00:00.00"),
+        (1.23, "0:00:01.23"),
+        (61.5, "0:01:01.50"),
+        (3661.234, "1:01:01.23"),
+    ],
+)
+def test_format_ass_time_formats_seconds(seconds: float, expected: str) -> None:
+    assert format_ass_time(seconds) == expected
+
+
+def test_format_ass_time_raises_for_negative_seconds() -> None:
+    with pytest.raises(ValueError):
+        format_ass_time(-0.01)
+
+
+def test_escape_ass_text_escapes_newline_and_braces() -> None:
+    assert escape_ass_text("a\n{b}") == r"a\N\{b\}"
+
+
+def test_parse_srt_time_converts_timestamp_to_seconds() -> None:
+    assert parse_srt_time("00:00:01,230") == pytest.approx(1.23)
+    assert parse_srt_time("01:02:03,456") == pytest.approx(3723.456)
+
+
+def test_parse_srt_time_raises_for_invalid_format() -> None:
+    with pytest.raises(ValueError):
+        parse_srt_time("1:02:03.456")
+
+
+def test_parse_srt_file_reads_cues(tmp_path: Path) -> None:
+    srt_path = tmp_path / "output.srt"
+    srt_path.write_text(
+        "1\n"
+        "00:00:00,000 --> 00:00:01,500\n"
+        "こんにちは\n"
+        "\n"
+        "2\n"
+        "00:00:01,500 --> 00:00:03,000\n"
+        "次の字幕\n",
+        encoding="utf-8",
+    )
+
+    assert parse_srt_file(srt_path) == [
+        SubtitleCue(start_sec=0.0, end_sec=1.5, text="こんにちは"),
+        SubtitleCue(start_sec=1.5, end_sec=3.0, text="次の字幕"),
+    ]
+
+
+def test_parse_srt_file_keeps_multiline_text(tmp_path: Path) -> None:
+    srt_path = tmp_path / "output.srt"
+    srt_path.write_text(
+        "1\n"
+        "00:00:00,000 --> 00:00:01,500\n"
+        "1行目\n"
+        "2行目\n",
+        encoding="utf-8",
+    )
+
+    assert parse_srt_file(srt_path) == [
+        SubtitleCue(start_sec=0.0, end_sec=1.5, text="1行目\n2行目"),
+    ]
+
+
+def test_parse_srt_file_raises_for_invalid_block(tmp_path: Path) -> None:
+    srt_path = tmp_path / "output.srt"
+    srt_path.write_text("1\ninvalid\ntext\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        parse_srt_file(srt_path)
+
+
+def test_build_ass_content_builds_ass_sections_and_dialogues() -> None:
+    layout = get_video_layout("short")
+    style = get_ass_subtitle_style(layout)
+    cues = [SubtitleCue(start_sec=0.0, end_sec=1.5, text="こんにちは\nテスト")]
+
+    content = build_ass_content(cues, layout, style)
+
+    assert "[Script Info]" in content
+    assert "[V4+ Styles]" in content
+    assert "[Events]" in content
+    assert "PlayResX: 1080" in content
+    assert "PlayResY: 1920" in content
+    assert "Style: Default,Arial,72," in content
+    assert ",1,5,1,2,60,60,140,1" in content
+    assert r"Dialogue: 0,0:00:00.00,0:00:01.50,Default,,0,0,0,,こんにちは\Nテスト" in content
+
+
+def test_write_ass_file_creates_parent_and_writes_utf8(tmp_path: Path) -> None:
+    ass_path = tmp_path / "nested" / "output.ass"
+
+    write_ass_file(ass_path, "こんにちは\n")
+
+    assert ass_path.read_text(encoding="utf-8") == "こんにちは\n"
+
+
+def test_escape_path_for_ffmpeg_filter_escapes_windows_path() -> None:
+    escaped = escape_path_for_ffmpeg_filter(Path(r"C:\tmp\video's\output.ass"))
+
+    assert escaped == r"C\:/tmp/video\'s/output.ass"
+
+
+def test_build_ass_filter_returns_ass_filter() -> None:
+    assert build_ass_filter(Path("tmp/video/output.ass")) == "ass=tmp/video/output.ass"
+
+
+def test_build_video_filter_returns_cover_filter_without_ass() -> None:
+    layout = get_video_layout("short")
+
+    assert build_video_filter(layout) == build_cover_filter(layout)
+
+
+def test_build_video_filter_appends_ass_filter() -> None:
+    layout = get_video_layout("short")
+
+    assert build_video_filter(layout, Path("tmp/video/output.ass")) == (
+        "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,"
+        "ass=tmp/video/output.ass"
+    )
+
+
 def test_parse_args_builds_video_options_with_defaults() -> None:
     options = parse_args(
         [
@@ -148,6 +324,7 @@ def test_parse_args_builds_video_options_with_defaults() -> None:
         output_path=Path("output.mp4"),
         layout="short",
         ffmpeg_path="ffmpeg",
+        srt_path=None,
     )
 
 
@@ -169,6 +346,78 @@ def test_parse_args_accepts_normal_layout_and_custom_ffmpeg() -> None:
 
     assert options.layout == "normal"
     assert options.ffmpeg_path == "C:/tools/ffmpeg.exe"
+
+
+def test_parse_args_accepts_srt_path() -> None:
+    options = parse_args(
+        [
+            "--audio",
+            "all.wav",
+            "--background",
+            "background.png",
+            "--output",
+            "output.mp4",
+            "--srt",
+            "output.srt",
+        ]
+    )
+
+    assert options.srt_path == Path("output.srt")
+
+
+def test_generate_video_with_srt_writes_ass_and_runs_ffmpeg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run_ffmpeg(command: list[str]) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(make_video, "run_ffmpeg", fake_run_ffmpeg)
+    srt_path = tmp_path / "output.srt"
+    srt_path.write_text(
+        "1\n"
+        "00:00:00,000 --> 00:00:01,500\n"
+        "こんにちは\n",
+        encoding="utf-8",
+    )
+    options = VideoOptions(
+        audio_path=Path("all.wav"),
+        background_path=Path("background.png"),
+        output_path=tmp_path / "video" / "output.mp4",
+        srt_path=srt_path,
+    )
+
+    generate_video(options)
+
+    ass_path = options.output_path.with_suffix(".ass")
+    assert ass_path.exists()
+    assert "Dialogue: 0,0:00:00.00,0:00:01.50,Default,,0,0,0,,こんにちは" in ass_path.read_text(
+        encoding="utf-8"
+    )
+    assert len(commands) == 1
+    assert f"ass={escape_path_for_ffmpeg_filter(ass_path)}" in commands[0][commands[0].index("-vf") + 1]
+
+
+def test_generate_video_without_srt_does_not_write_ass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run_ffmpeg(command: list[str]) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(make_video, "run_ffmpeg", fake_run_ffmpeg)
+    options = VideoOptions(
+        audio_path=Path("all.wav"),
+        background_path=Path("background.png"),
+        output_path=tmp_path / "video" / "output.mp4",
+    )
+
+    generate_video(options)
+
+    assert not options.output_path.with_suffix(".ass").exists()
+    assert commands[0][commands[0].index("-vf") + 1] == build_cover_filter(get_video_layout("short"))
 
 
 def test_main_returns_zero_and_prints_video_path(
