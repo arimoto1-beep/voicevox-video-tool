@@ -8,3 +8,5 @@ wav/
 *.srt
 all.wav
 output.srt
+ffmpeg/
+tmp/
