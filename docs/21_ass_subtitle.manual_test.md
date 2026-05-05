@@ -90,6 +90,7 @@ dir assets\background_normal.png
 
 `short` layout は 1080x1920, 30fps の縦長動画を生成する。  
 `--srt` を指定すると、`output_path` の拡張子を `.ass` に置き換えたASSファイルが同じディレクトリに生成される。
+`--ass-font-size` と `--ass-margin-v` を指定すると、選択されたlayoutのデフォルトASSスタイルを一時的に上書きできる。
 
 ```powershell
 python make_video.py `
@@ -98,6 +99,8 @@ python make_video.py `
   --srt tmp/cli_pipeline/output.srt `
   --output tmp/video/output_short_subtitled.mp4 `
   --layout short `
+  --ass-font-size 112 `
+  --ass-margin-v 420 `
   --ffmpeg .\ffmpeg\bin\ffmpeg.exe
 ```
 
@@ -116,6 +119,7 @@ tmp/video/output_short_subtitled.ass
 ## 5. normal layout の字幕付き動画生成
 
 `normal` layout は 1920x1080, 30fps の横長動画を生成する。
+`--ass-font-size` と `--ass-margin-v` を省略した場合は、layout別デフォルト値が使われる。
 
 ```powershell
 python make_video.py `
@@ -124,6 +128,8 @@ python make_video.py `
   --srt tmp/cli_pipeline/output.srt `
   --output tmp/video/output_normal_subtitled.mp4 `
   --layout normal `
+  --ass-font-size 84 `
+  --ass-margin-v 180 `
   --ffmpeg .\ffmpeg\bin\ffmpeg.exe
 ```
 
@@ -159,8 +165,8 @@ Get-Content tmp\video\output_normal_subtitled.ass -Encoding UTF8
 - [ ] `[V4+ Styles]` が含まれていること。
 - [ ] `Style:` 行にshort用の文字サイズが反映されていること。
 - [ ] short用のフォントとして `Yu Gothic UI` が含まれていること。
-- [ ] short用の文字サイズとして `96` が含まれていること。
-- [ ] short用の下余白として `260` が含まれていること。
+- [ ] short用の文字サイズとして、CLI指定値 `112` または未指定時のデフォルト値 `96` が含まれていること。
+- [ ] short用の下余白として、CLI指定値 `420` または未指定時のデフォルト値 `260` が含まれていること。
 - [ ] `[Events]` が含まれていること。
 - [ ] `Dialogue:` 行が含まれていること。
 - [ ] SRTの字幕本文が含まれていること。
@@ -174,8 +180,8 @@ Get-Content tmp\video\output_normal_subtitled.ass -Encoding UTF8
 - [ ] `[V4+ Styles]` が含まれていること。
 - [ ] `Style:` 行にnormal用の文字サイズが反映されていること。
 - [ ] normal用のフォントとして `Yu Gothic UI` が含まれていること。
-- [ ] normal用の文字サイズとして `72` が含まれていること。
-- [ ] normal用の下余白として `150` が含まれていること。
+- [ ] normal用の文字サイズとして、CLI指定値 `84` または未指定時のデフォルト値 `72` が含まれていること。
+- [ ] normal用の下余白として、CLI指定値 `180` または未指定時のデフォルト値 `150` が含まれていること。
 - [ ] `[Events]` が含まれていること。
 - [ ] `Dialogue:` 行が含まれていること。
 - [ ] SRTの字幕本文が含まれていること。

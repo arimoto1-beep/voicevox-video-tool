@@ -41,7 +41,7 @@ class SubtitleCue:
 
 ### VideoOptions
 
-既存の動画生成オプションに `srt_path` を追加する。
+既存の動画生成オプションに `srt_path` とASS字幕スタイルの一時上書き値を追加する。
 
 ```python
 @dataclass
@@ -52,11 +52,14 @@ class VideoOptions:
     layout: str = "short"
     ffmpeg_path: str = "ffmpeg"
     srt_path: Path | None = None
+    ass_font_size: int | None = None
+    ass_margin_v: int | None = None
 ```
 
 ## 3. 追加・変更する関数一覧
 
 - `get_ass_subtitle_style`
+- `apply_ass_style_overrides`
 - `format_ass_time`
 - `escape_ass_text`
 - `parse_srt_time`
@@ -107,6 +110,39 @@ def get_ass_subtitle_style(layout: VideoLayout) -> AssSubtitleStyle:
 テスト方針:
 
 - `short` / `normal` のスタイル値を確認する。
+
+### apply_ass_style_overrides
+
+```python
+def apply_ass_style_overrides(
+    style: AssSubtitleStyle,
+    font_size: int | None = None,
+    margin_v: int | None = None,
+) -> AssSubtitleStyle:
+    ...
+```
+
+役割:
+
+- layout別デフォルトのASS字幕スタイルに、CLI引数で指定された一時上書き値を適用する。
+- 元の `style` は変更せず、新しい `AssSubtitleStyle` を返す。
+
+仕様:
+
+- `font_size` が指定された場合は `style.font_size` を上書きする。
+- `margin_v` が指定された場合は `style.margin_v` を上書きする。
+- 未指定の値は元の `style` の値を使う。
+- `font_name`, `outline`, `shadow`, `alignment` は元の `style` から引き継ぐ。
+- `font_size <= 0` は `ValueError` にする。
+- `margin_v < 0` は `ValueError` にする。
+
+テスト方針:
+
+- 未指定時に元のstyleと同じ値になること。
+- `font_size` / `margin_v` を個別に上書きできること。
+- 両方を同時に上書きできること。
+- 元のstyleが変更されないこと。
+- 不正値で `ValueError` になること。
 
 ### format_ass_time
 
@@ -435,8 +471,9 @@ def generate_video(options: VideoOptions) -> None:
 1. `get_video_layout(options.layout)`
 2. `options.output_path.parent.mkdir(parents=True, exist_ok=True)`
 3. `options.srt_path` がある場合はSRTを読みASSを書き出す。
-4. `build_ffmpeg_command(options, layout, ass_path=ass_path)`
-5. `run_ffmpeg(command)`
+4. `options.srt_path` がある場合はlayout別デフォルトスタイルに `ass_font_size` / `ass_margin_v` の上書きを適用する。
+5. `build_ffmpeg_command(options, layout, ass_path=ass_path)`
+6. `run_ffmpeg(command)`
 
 外部依存:
 
@@ -446,6 +483,7 @@ def generate_video(options: VideoOptions) -> None:
 テスト方針:
 
 - `srt_path` ありでASSを書き出し、ASS filter付きコマンドを実行関数へ渡すこと。
+- `srt_path` ありで `ass_font_size` / `ass_margin_v` を指定した場合、生成ASSのStyle行に反映されること。
 - `srt_path` なしでASSを書き出さず、従来どおりのfilterになること。
 
 ### parse_args
@@ -462,10 +500,14 @@ def parse_args(argv: list[str] | None = None) -> VideoOptions:
 変更点:
 
 - 任意引数 `--srt` を追加する。
+- 任意引数 `--ass-font-size` を追加する。
+- 任意引数 `--ass-margin-v` を追加する。
 
 テスト方針:
 
 - `--srt` 指定時に `VideoOptions.srt_path` に入ること。
+- `--ass-font-size` 指定時に `VideoOptions.ass_font_size` に入ること。
+- `--ass-margin-v` 指定時に `VideoOptions.ass_margin_v` に入ること。
 - 省略時に `None` になること。
 
 ## 5. 初期実装でやらないこと

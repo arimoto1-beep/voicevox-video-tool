@@ -8,6 +8,7 @@ from make_video import (
     SubtitleCue,
     VideoLayout,
     VideoOptions,
+    apply_ass_style_overrides,
     build_ass_content,
     build_ass_filter,
     build_cover_filter,
@@ -182,6 +183,87 @@ def test_get_ass_subtitle_style_returns_normal_style() -> None:
     )
 
 
+def test_apply_ass_style_overrides_keeps_style_when_values_are_not_given() -> None:
+    style = get_ass_subtitle_style(get_video_layout("short"))
+
+    assert apply_ass_style_overrides(style) == style
+
+
+def test_apply_ass_style_overrides_replaces_font_size_only() -> None:
+    style = get_ass_subtitle_style(get_video_layout("short"))
+
+    updated = apply_ass_style_overrides(style, font_size=112)
+
+    assert updated == AssSubtitleStyle(
+        font_name="Yu Gothic UI",
+        font_size=112,
+        margin_v=260,
+        outline=5,
+        shadow=1,
+        alignment=2,
+    )
+
+
+def test_apply_ass_style_overrides_replaces_margin_v_only() -> None:
+    style = get_ass_subtitle_style(get_video_layout("short"))
+
+    updated = apply_ass_style_overrides(style, margin_v=420)
+
+    assert updated == AssSubtitleStyle(
+        font_name="Yu Gothic UI",
+        font_size=96,
+        margin_v=420,
+        outline=5,
+        shadow=1,
+        alignment=2,
+    )
+
+
+def test_apply_ass_style_overrides_replaces_font_size_and_margin_v() -> None:
+    style = get_ass_subtitle_style(get_video_layout("normal"))
+
+    updated = apply_ass_style_overrides(style, font_size=84, margin_v=180)
+
+    assert updated == AssSubtitleStyle(
+        font_name="Yu Gothic UI",
+        font_size=84,
+        margin_v=180,
+        outline=4,
+        shadow=1,
+        alignment=2,
+    )
+
+
+def test_apply_ass_style_overrides_does_not_mutate_original_style() -> None:
+    style = get_ass_subtitle_style(get_video_layout("short"))
+
+    apply_ass_style_overrides(style, font_size=112, margin_v=420)
+
+    assert style == AssSubtitleStyle(
+        font_name="Yu Gothic UI",
+        font_size=96,
+        margin_v=260,
+        outline=5,
+        shadow=1,
+        alignment=2,
+    )
+
+
+@pytest.mark.parametrize("font_size", [0, -1])
+def test_apply_ass_style_overrides_raises_for_invalid_font_size(font_size: int) -> None:
+    style = get_ass_subtitle_style(get_video_layout("short"))
+
+    with pytest.raises(ValueError):
+        apply_ass_style_overrides(style, font_size=font_size)
+
+
+def test_apply_ass_style_overrides_raises_for_invalid_margin_v() -> None:
+    style = get_ass_subtitle_style(get_video_layout("short"))
+
+    with pytest.raises(ValueError):
+        apply_ass_style_overrides(style, margin_v=-1)
+
+
 @pytest.mark.parametrize(
     ("seconds", "expected"),
     [
@@ -336,6 +418,8 @@ def test_parse_args_builds_video_options_with_defaults() -> None:
         layout="short",
         ffmpeg_path="ffmpeg",
         srt_path=None,
+        ass_font_size=None,
+        ass_margin_v=None,
     )
 
 
@@ -376,6 +460,26 @@ def test_parse_args_accepts_srt_path() -> None:
     assert options.srt_path == Path("output.srt")
 
 
+def test_parse_args_accepts_ass_style_overrides() -> None:
+    options = parse_args(
+        [
+            "--audio",
+            "all.wav",
+            "--background",
+            "background.png",
+            "--output",
+            "output.mp4",
+            "--ass-font-size",
+            "112",
+            "--ass-margin-v",
+            "420",
+        ]
+    )
+
+    assert options.ass_font_size == 112
+    assert options.ass_margin_v == 420
+
+
 def test_generate_video_with_srt_writes_ass_and_runs_ffmpeg(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -410,6 +514,40 @@ def test_generate_video_with_srt_writes_ass_and_runs_ffmpeg(
     assert f"ass={escape_path_for_ffmpeg_filter(ass_path)}" in commands[0][commands[0].index("-vf") + 1]
 
 
+def test_generate_video_with_srt_applies_ass_style_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run_ffmpeg(command: list[str]) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(make_video, "run_ffmpeg", fake_run_ffmpeg)
+    srt_path = tmp_path / "output.srt"
+    srt_path.write_text(
+        "1\n"
+        "00:00:00,000 --> 00:00:01,500\n"
+        "こんにちは\n",
+        encoding="utf-8",
+    )
+    options = VideoOptions(
+        audio_path=Path("all.wav"),
+        background_path=Path("background.png"),
+        output_path=tmp_path / "video" / "output.mp4",
+        srt_path=srt_path,
+        ass_font_size=112,
+        ass_margin_v=420,
+    )
+
+    generate_video(options)
+
+    ass_path = options.output_path.with_suffix(".ass")
+    content = ass_path.read_text(encoding="utf-8")
+    assert "Style: Default,Yu Gothic UI,112," in content
+    assert ",1,5,1,2,60,60,420,1" in content
+    assert len(commands) == 1
+
+
 def test_generate_video_without_srt_does_not_write_ass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -423,6 +561,8 @@ def test_generate_video_without_srt_does_not_write_ass(
         audio_path=Path("all.wav"),
         background_path=Path("background.png"),
         output_path=tmp_path / "video" / "output.mp4",
+        ass_font_size=112,
+        ass_margin_v=420,
     )
 
     generate_video(options)

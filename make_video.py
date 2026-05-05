@@ -24,6 +24,8 @@ class VideoOptions:
     layout: str = "short"
     ffmpeg_path: str = "ffmpeg"
     srt_path: Path | None = None
+    ass_font_size: int | None = None
+    ass_margin_v: int | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,26 @@ def get_ass_subtitle_style(layout: VideoLayout) -> AssSubtitleStyle:
     if layout.name == "normal":
         return AssSubtitleStyle(font_name="Yu Gothic UI", font_size=72, margin_v=150, outline=4, shadow=1)
     raise ValueError(f"unknown layout: {layout.name}")
+
+
+def apply_ass_style_overrides(
+    style: AssSubtitleStyle,
+    font_size: int | None = None,
+    margin_v: int | None = None,
+) -> AssSubtitleStyle:
+    if font_size is not None and font_size <= 0:
+        raise ValueError("ASS font size must be greater than 0")
+    if margin_v is not None and margin_v < 0:
+        raise ValueError("ASS margin_v must be 0 or greater")
+
+    return AssSubtitleStyle(
+        font_name=style.font_name,
+        font_size=font_size if font_size is not None else style.font_size,
+        margin_v=margin_v if margin_v is not None else style.margin_v,
+        outline=style.outline,
+        shadow=style.shadow,
+        alignment=style.alignment,
+    )
 
 
 def format_ass_time(seconds: float) -> str:
@@ -222,6 +244,11 @@ def generate_video(options: VideoOptions) -> None:
     if options.srt_path is not None:
         cues = parse_srt_file(options.srt_path)
         style = get_ass_subtitle_style(layout)
+        style = apply_ass_style_overrides(
+            style,
+            font_size=options.ass_font_size,
+            margin_v=options.ass_margin_v,
+        )
         ass_content = build_ass_content(cues, layout, style)
         ass_path = options.output_path.with_suffix(".ass")
         write_ass_file(ass_path, ass_content)
@@ -238,6 +265,8 @@ def parse_args(argv: list[str] | None = None) -> VideoOptions:
     parser.add_argument("--layout", choices=["short", "normal"], default="short")
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--srt", type=Path)
+    parser.add_argument("--ass-font-size", type=int)
+    parser.add_argument("--ass-margin-v", type=int)
 
     args = parser.parse_args(argv)
     return VideoOptions(
@@ -247,6 +276,8 @@ def parse_args(argv: list[str] | None = None) -> VideoOptions:
         layout=args.layout,
         ffmpeg_path=args.ffmpeg,
         srt_path=args.srt,
+        ass_font_size=args.ass_font_size,
+        ass_margin_v=args.ass_margin_v,
     )
 
 
