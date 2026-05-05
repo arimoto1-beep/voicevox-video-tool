@@ -82,6 +82,9 @@ def get_ass_subtitle_style(layout: VideoLayout) -> AssSubtitleStyle:
 役割:
 
 - layoutに応じたASS字幕スタイルを返す。
+- 第40回の手動確認で字幕サイズが小さく、字幕位置が下すぎたため、初期値として文字サイズと下余白を大きくする。
+- 日本語表示を前提に `font_name` は `Yu Gothic UI` にする。
+- 縁取りは十分だったため、`outline` は据え置く。
 
 入力:
 
@@ -90,6 +93,8 @@ def get_ass_subtitle_style(layout: VideoLayout) -> AssSubtitleStyle:
 出力:
 
 - `AssSubtitleStyle`
+- `short`: `font_name="Yu Gothic UI"`, `font_size=96`, `margin_v=260`, `outline=5`, `shadow=1`, `alignment=2`
+- `normal`: `font_name="Yu Gothic UI"`, `font_size=72`, `margin_v=150`, `outline=4`, `shadow=1`, `alignment=2`
 
 主なエラー:
 

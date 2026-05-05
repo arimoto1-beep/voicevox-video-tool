@@ -160,9 +160,9 @@ def test_get_ass_subtitle_style_returns_short_style() -> None:
     style = get_ass_subtitle_style(get_video_layout("short"))
 
     assert style == AssSubtitleStyle(
-        font_name="Arial",
-        font_size=72,
-        margin_v=140,
+        font_name="Yu Gothic UI",
+        font_size=96,
+        margin_v=260,
         outline=5,
         shadow=1,
         alignment=2,
@@ -173,9 +173,9 @@ def test_get_ass_subtitle_style_returns_normal_style() -> None:
     style = get_ass_subtitle_style(get_video_layout("normal"))
 
     assert style == AssSubtitleStyle(
-        font_name="Arial",
-        font_size=56,
-        margin_v=80,
+        font_name="Yu Gothic UI",
+        font_size=72,
+        margin_v=150,
         outline=4,
         shadow=1,
         alignment=2,
@@ -268,9 +268,20 @@ def test_build_ass_content_builds_ass_sections_and_dialogues() -> None:
     assert "[Events]" in content
     assert "PlayResX: 1080" in content
     assert "PlayResY: 1920" in content
-    assert "Style: Default,Arial,72," in content
-    assert ",1,5,1,2,60,60,140,1" in content
+    assert "Style: Default,Yu Gothic UI,96," in content
+    assert ",1,5,1,2,60,60,260,1" in content
     assert r"Dialogue: 0,0:00:00.00,0:00:01.50,Default,,0,0,0,,こんにちは\Nテスト" in content
+
+
+def test_build_ass_content_uses_normal_style_values() -> None:
+    layout = get_video_layout("normal")
+    style = get_ass_subtitle_style(layout)
+    cues = [SubtitleCue(start_sec=0.0, end_sec=1.5, text="text")]
+
+    content = build_ass_content(cues, layout, style)
+
+    assert "Style: Default,Yu Gothic UI,72," in content
+    assert ",1,4,1,2,60,60,150,1" in content
 
 
 def test_write_ass_file_creates_parent_and_writes_utf8(tmp_path: Path) -> None:

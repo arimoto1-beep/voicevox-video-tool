@@ -61,9 +61,9 @@ def build_cover_filter(layout: VideoLayout) -> str:
 
 def get_ass_subtitle_style(layout: VideoLayout) -> AssSubtitleStyle:
     if layout.name == "short":
-        return AssSubtitleStyle(font_name="Arial", font_size=72, margin_v=140, outline=5, shadow=1)
+        return AssSubtitleStyle(font_name="Yu Gothic UI", font_size=96, margin_v=260, outline=5, shadow=1)
     if layout.name == "normal":
-        return AssSubtitleStyle(font_name="Arial", font_size=56, margin_v=80, outline=4, shadow=1)
+        return AssSubtitleStyle(font_name="Yu Gothic UI", font_size=72, margin_v=150, outline=4, shadow=1)
     raise ValueError(f"unknown layout: {layout.name}")
 
 
