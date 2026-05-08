@@ -54,6 +54,8 @@ class VideoOptions:
     srt_path: Path | None = None
     ass_font_size: int | None = None
     ass_margin_v: int | None = None
+    ass_wrap_chars: int | None = None
+    ass_max_lines: int = 2
 ```
 
 ## 3. 追加・変更する関数一覧
@@ -62,6 +64,7 @@ class VideoOptions:
 - `apply_ass_style_overrides`
 - `format_ass_time`
 - `escape_ass_text`
+- `wrap_subtitle_text`
 - `parse_srt_time`
 - `parse_srt_file`
 - `build_ass_content`
@@ -208,6 +211,43 @@ def escape_ass_text(text: str) -> str:
 
 - 改行と波括弧の変換を確認する。
 
+### wrap_subtitle_text
+
+```python
+def wrap_subtitle_text(
+    text: str,
+    wrap_chars: int | None = None,
+    max_lines: int = 2,
+) -> str:
+    ...
+```
+
+役割:
+
+- ASS焼き込み用の表示本文だけを、文字数ベースで簡易折り返しする。
+- SRTファイルや `SubtitleCue.text` 自体は変更しない。
+
+仕様:
+
+- `wrap_chars` が `None` の場合は元の `text` をそのまま返す。
+- `wrap_chars` が指定された場合は、おおむね指定文字数ごとにASS改行 `\N` を入れる。
+- `max_lines` を超える場合は、最後の行に残りをまとめる。
+- 既存の通常改行はASS改行 `\N` として扱う。
+- 空文字は空文字のまま返す。
+- `wrap_chars <= 0` は `ValueError` にする。
+- `max_lines <= 0` は `ValueError` にする。
+- 自然な文節分割、句読点優先、文字幅考慮、省略記号による切り詰めは行わない。
+
+テスト方針:
+
+- `wrap_chars=None` では元の文字列を返すこと。
+- 短い文字列や空文字を壊さないこと。
+- `wrap_chars` 指定時に `\N` が入ること。
+- `max_lines` を超えた分が最後の行にまとまること。
+- 既存改行がASS改行として扱われること。
+- 不正値で `ValueError` になること。
+- `escape_ass_text` と組み合わせても `\N` が保持されること。
+
 ### parse_srt_time
 
 ```python
@@ -280,6 +320,8 @@ def build_ass_content(
     cues: list[SubtitleCue],
     layout: VideoLayout,
     style: AssSubtitleStyle,
+    wrap_chars: int | None = None,
+    max_lines: int = 2,
 ) -> str:
     ...
 ```
@@ -293,6 +335,8 @@ def build_ass_content(
 - `cues`: 字幕キュー
 - `layout`: 動画layout
 - `style`: ASS字幕スタイル
+- `wrap_chars`: ASS本文だけに適用する簡易折り返し文字数
+- `max_lines`: 折り返し後の最大行数
 
 出力:
 
@@ -305,6 +349,8 @@ def build_ass_content(
 - `[Events]`
 
 を含める。
+- `wrap_chars` が指定された場合、Dialogue本文だけに `wrap_subtitle_text` を適用してから `escape_ass_text` する。
+- ASS改行には `\N` を使う。
 
 主なエラー:
 
@@ -318,6 +364,8 @@ def build_ass_content(
 テスト方針:
 
 - セクション、PlayRes、Style行、Dialogue行を確認する。
+- `wrap_chars` 指定時にDialogue本文へ `\N` が入ること。
+- `wrap_chars` 未指定時に従来どおり折り返さないこと。
 
 ### write_ass_file
 
@@ -472,8 +520,9 @@ def generate_video(options: VideoOptions) -> None:
 2. `options.output_path.parent.mkdir(parents=True, exist_ok=True)`
 3. `options.srt_path` がある場合はSRTを読みASSを書き出す。
 4. `options.srt_path` がある場合はlayout別デフォルトスタイルに `ass_font_size` / `ass_margin_v` の上書きを適用する。
-5. `build_ffmpeg_command(options, layout, ass_path=ass_path)`
-6. `run_ffmpeg(command)`
+5. `options.srt_path` がある場合は `ass_wrap_chars` / `ass_max_lines` をASS本文生成に渡す。
+6. `build_ffmpeg_command(options, layout, ass_path=ass_path)`
+7. `run_ffmpeg(command)`
 
 外部依存:
 
@@ -484,6 +533,7 @@ def generate_video(options: VideoOptions) -> None:
 
 - `srt_path` ありでASSを書き出し、ASS filter付きコマンドを実行関数へ渡すこと。
 - `srt_path` ありで `ass_font_size` / `ass_margin_v` を指定した場合、生成ASSのStyle行に反映されること。
+- `srt_path` ありで `ass_wrap_chars` を指定した場合、生成ASSのDialogue行に `\N` が反映されること。
 - `srt_path` なしでASSを書き出さず、従来どおりのfilterになること。
 
 ### parse_args
@@ -502,13 +552,17 @@ def parse_args(argv: list[str] | None = None) -> VideoOptions:
 - 任意引数 `--srt` を追加する。
 - 任意引数 `--ass-font-size` を追加する。
 - 任意引数 `--ass-margin-v` を追加する。
+- 任意引数 `--ass-wrap-chars` を追加する。
+- 任意引数 `--ass-max-lines` を追加する。
 
 テスト方針:
 
 - `--srt` 指定時に `VideoOptions.srt_path` に入ること。
 - `--ass-font-size` 指定時に `VideoOptions.ass_font_size` に入ること。
 - `--ass-margin-v` 指定時に `VideoOptions.ass_margin_v` に入ること。
-- 省略時に `None` になること。
+- `--ass-wrap-chars` 指定時に `VideoOptions.ass_wrap_chars` に入ること。
+- `--ass-max-lines` 指定時に `VideoOptions.ass_max_lines` に入ること。
+- `--ass-wrap-chars` 省略時は `None`、`--ass-max-lines` 省略時は `2` になること。
 
 ## 5. 初期実装でやらないこと
 
@@ -520,6 +574,7 @@ def parse_args(argv: list[str] | None = None) -> VideoOptions:
 - 口パク
 - 字幕アニメーション
 - 複雑な複数行制御
+- 自然な文節分割や行間調整
 - ルビ
 - YouTubeへの自動アップロード
 - noteへの動画埋め込み

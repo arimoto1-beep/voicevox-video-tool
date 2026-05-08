@@ -25,6 +25,7 @@ from make_video import (
     parse_srt_file,
     parse_srt_time,
     run_ffmpeg,
+    wrap_subtitle_text,
     write_ass_file,
 )
 
@@ -286,6 +287,54 @@ def test_escape_ass_text_escapes_newline_and_braces() -> None:
     assert escape_ass_text("a\n{b}") == r"a\N\{b\}"
 
 
+def test_wrap_subtitle_text_returns_original_when_wrap_chars_is_none() -> None:
+    assert wrap_subtitle_text("音声と字幕をまとめて作る") == "音声と字幕をまとめて作る"
+
+
+def test_wrap_subtitle_text_keeps_empty_text() -> None:
+    assert wrap_subtitle_text("", wrap_chars=8) == ""
+
+
+def test_wrap_subtitle_text_does_not_wrap_short_text() -> None:
+    assert wrap_subtitle_text("短い字幕", wrap_chars=8) == "短い字幕"
+
+
+def test_wrap_subtitle_text_inserts_ass_newline_when_wrap_chars_is_given() -> None:
+    assert wrap_subtitle_text("音声と字幕をまとめて作る", wrap_chars=8) == r"音声と字幕をまと\Nめて作る"
+
+
+def test_wrap_subtitle_text_keeps_max_two_lines() -> None:
+    wrapped = wrap_subtitle_text("12345678901234567890", wrap_chars=5, max_lines=2)
+
+    assert wrapped == r"12345\N678901234567890"
+    assert len(wrapped.split(r"\N")) == 2
+
+
+def test_wrap_subtitle_text_merges_remaining_text_into_last_line() -> None:
+    assert wrap_subtitle_text("123456789012", wrap_chars=3, max_lines=3) == r"123\N456\N789012"
+
+
+def test_wrap_subtitle_text_treats_existing_newline_as_ass_newline() -> None:
+    assert wrap_subtitle_text("1行目\n2行目", wrap_chars=10) == r"1行目\N2行目"
+
+
+@pytest.mark.parametrize("wrap_chars", [0, -1])
+def test_wrap_subtitle_text_raises_for_invalid_wrap_chars(wrap_chars: int) -> None:
+    with pytest.raises(ValueError):
+        wrap_subtitle_text("text", wrap_chars=wrap_chars)
+
+
+def test_wrap_subtitle_text_raises_for_invalid_max_lines() -> None:
+    with pytest.raises(ValueError):
+        wrap_subtitle_text("text", wrap_chars=4, max_lines=0)
+
+
+def test_escape_ass_text_keeps_wrapped_ass_newline_and_escapes_braces() -> None:
+    wrapped = wrap_subtitle_text("abcd{efgh}", wrap_chars=4)
+
+    assert escape_ass_text(wrapped) == r"abcd\N\{efgh\}"
+
+
 def test_parse_srt_time_converts_timestamp_to_seconds() -> None:
     assert parse_srt_time("00:00:01,230") == pytest.approx(1.23)
     assert parse_srt_time("01:02:03,456") == pytest.approx(3723.456)
@@ -366,6 +415,27 @@ def test_build_ass_content_uses_normal_style_values() -> None:
     assert ",1,4,1,2,60,60,150,1" in content
 
 
+def test_build_ass_content_wraps_dialogue_text_when_wrap_chars_is_given() -> None:
+    layout = get_video_layout("short")
+    style = get_ass_subtitle_style(layout)
+    cues = [SubtitleCue(start_sec=0.0, end_sec=1.5, text="音声と字幕をまとめて作る")]
+
+    content = build_ass_content(cues, layout, style, wrap_chars=8, max_lines=2)
+
+    assert r"Dialogue: 0,0:00:00.00,0:00:01.50,Default,,0,0,0,,音声と字幕をまと\Nめて作る" in content
+
+
+def test_build_ass_content_does_not_wrap_dialogue_text_when_wrap_chars_is_none() -> None:
+    layout = get_video_layout("short")
+    style = get_ass_subtitle_style(layout)
+    cues = [SubtitleCue(start_sec=0.0, end_sec=1.5, text="音声と字幕をまとめて作る")]
+
+    content = build_ass_content(cues, layout, style)
+
+    assert r"音声と字幕をま\Nとめて作る" not in content
+    assert "Default,,0,0,0,,音声と字幕をまとめて作る" in content
+
+
 def test_write_ass_file_creates_parent_and_writes_utf8(tmp_path: Path) -> None:
     ass_path = tmp_path / "nested" / "output.ass"
 
@@ -420,6 +490,8 @@ def test_parse_args_builds_video_options_with_defaults() -> None:
         srt_path=None,
         ass_font_size=None,
         ass_margin_v=None,
+        ass_wrap_chars=None,
+        ass_max_lines=2,
     )
 
 
@@ -478,6 +550,26 @@ def test_parse_args_accepts_ass_style_overrides() -> None:
 
     assert options.ass_font_size == 112
     assert options.ass_margin_v == 420
+
+
+def test_parse_args_accepts_ass_wrap_options() -> None:
+    options = parse_args(
+        [
+            "--audio",
+            "all.wav",
+            "--background",
+            "background.png",
+            "--output",
+            "output.mp4",
+            "--ass-wrap-chars",
+            "14",
+            "--ass-max-lines",
+            "2",
+        ]
+    )
+
+    assert options.ass_wrap_chars == 14
+    assert options.ass_max_lines == 2
 
 
 def test_generate_video_with_srt_writes_ass_and_runs_ffmpeg(
@@ -548,6 +640,39 @@ def test_generate_video_with_srt_applies_ass_style_overrides(
     assert len(commands) == 1
 
 
+def test_generate_video_with_srt_applies_ass_wrap_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run_ffmpeg(command: list[str]) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(make_video, "run_ffmpeg", fake_run_ffmpeg)
+    srt_path = tmp_path / "output.srt"
+    srt_path.write_text(
+        "1\n"
+        "00:00:00,000 --> 00:00:01,500\n"
+        "音声と字幕をまとめて作る\n",
+        encoding="utf-8",
+    )
+    options = VideoOptions(
+        audio_path=Path("all.wav"),
+        background_path=Path("background.png"),
+        output_path=tmp_path / "video" / "output.mp4",
+        srt_path=srt_path,
+        ass_wrap_chars=8,
+        ass_max_lines=2,
+    )
+
+    generate_video(options)
+
+    ass_path = options.output_path.with_suffix(".ass")
+    content = ass_path.read_text(encoding="utf-8")
+    assert r"Default,,0,0,0,,音声と字幕をまと\Nめて作る" in content
+    assert len(commands) == 1
+
+
 def test_generate_video_without_srt_does_not_write_ass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -563,6 +688,8 @@ def test_generate_video_without_srt_does_not_write_ass(
         output_path=tmp_path / "video" / "output.mp4",
         ass_font_size=112,
         ass_margin_v=420,
+        ass_wrap_chars=8,
+        ass_max_lines=2,
     )
 
     generate_video(options)

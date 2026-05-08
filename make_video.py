@@ -26,6 +26,8 @@ class VideoOptions:
     srt_path: Path | None = None
     ass_font_size: int | None = None
     ass_margin_v: int | None = None
+    ass_wrap_chars: int | None = None
+    ass_max_lines: int = 2
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,34 @@ def escape_ass_text(text: str) -> str:
     return text.replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
 
 
+def wrap_subtitle_text(
+    text: str,
+    wrap_chars: int | None = None,
+    max_lines: int = 2,
+) -> str:
+    if max_lines <= 0:
+        raise ValueError("ASS max lines must be greater than 0")
+    if wrap_chars is None:
+        return text
+    if wrap_chars <= 0:
+        raise ValueError("ASS wrap chars must be greater than 0")
+    if text == "":
+        return text
+
+    normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines: list[str] = []
+    for source_line in normalized_text.split("\n"):
+        if source_line == "":
+            lines.append(source_line)
+            continue
+        lines.extend(source_line[index : index + wrap_chars] for index in range(0, len(source_line), wrap_chars))
+
+    if len(lines) > max_lines:
+        lines = lines[: max_lines - 1] + ["".join(lines[max_lines - 1 :])]
+
+    return r"\N".join(lines)
+
+
 def parse_srt_time(value: str) -> float:
     match = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", value)
     if match is None:
@@ -146,6 +176,8 @@ def build_ass_content(
     cues: list[SubtitleCue],
     layout: VideoLayout,
     style: AssSubtitleStyle,
+    wrap_chars: int | None = None,
+    max_lines: int = 2,
 ) -> str:
     lines = [
         "[Script Info]",
@@ -170,10 +202,11 @@ def build_ass_content(
     ]
 
     for cue in cues:
+        display_text = wrap_subtitle_text(cue.text, wrap_chars=wrap_chars, max_lines=max_lines)
         lines.append(
             "Dialogue: "
             f"0,{format_ass_time(cue.start_sec)},{format_ass_time(cue.end_sec)},"
-            f"Default,,0,0,0,,{escape_ass_text(cue.text)}"
+            f"Default,,0,0,0,,{escape_ass_text(display_text)}"
         )
 
     return "\n".join(lines) + "\n"
@@ -249,7 +282,13 @@ def generate_video(options: VideoOptions) -> None:
             font_size=options.ass_font_size,
             margin_v=options.ass_margin_v,
         )
-        ass_content = build_ass_content(cues, layout, style)
+        ass_content = build_ass_content(
+            cues,
+            layout,
+            style,
+            wrap_chars=options.ass_wrap_chars,
+            max_lines=options.ass_max_lines,
+        )
         ass_path = options.output_path.with_suffix(".ass")
         write_ass_file(ass_path, ass_content)
 
@@ -267,6 +306,8 @@ def parse_args(argv: list[str] | None = None) -> VideoOptions:
     parser.add_argument("--srt", type=Path)
     parser.add_argument("--ass-font-size", type=int)
     parser.add_argument("--ass-margin-v", type=int)
+    parser.add_argument("--ass-wrap-chars", type=int)
+    parser.add_argument("--ass-max-lines", type=int, default=2)
 
     args = parser.parse_args(argv)
     return VideoOptions(
@@ -278,6 +319,8 @@ def parse_args(argv: list[str] | None = None) -> VideoOptions:
         srt_path=args.srt,
         ass_font_size=args.ass_font_size,
         ass_margin_v=args.ass_margin_v,
+        ass_wrap_chars=args.ass_wrap_chars,
+        ass_max_lines=args.ass_max_lines,
     )
 
 
