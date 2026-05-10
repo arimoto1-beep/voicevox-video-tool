@@ -37,6 +37,9 @@ class ScriptOptions:
     default_speed: float = 1.0
     default_pause: float | None = None
     speaker_aliases: dict[str, str] = field(default_factory=dict)
+    split_long_dialogue: bool = False
+    dialogue_split_chars: int = 18
+    dialogue_split_min_chars: int = 6
 
 
 @dataclass
@@ -551,6 +554,12 @@ def generate_voicevox_assets(options: ScriptOptions) -> WavInfo:
 
     lines = read_script_file(options.script_path)
     events = parse_script(lines, options.script_path.parent)
+    if options.split_long_dialogue:
+        events = split_long_dialogue_events(
+            events,
+            max_chars=options.dialogue_split_chars,
+            min_chars=options.dialogue_split_min_chars,
+        )
     events = insert_gap_events(events, options.default_gap)
     speakers = fetch_voicevox_speakers(options.voicevox_url)
     events = synthesize_dialogue_wavs(events, speakers, options.voicevox_url, options.out_dir, aliases)
@@ -573,6 +582,23 @@ def parse_args(argv: list[str] | None = None) -> ScriptOptions:
         default="http://127.0.0.1:50021",
         help="VOICEVOX ENGINE base URL.",
     )
+    parser.add_argument(
+        "--split-long-dialogue",
+        action="store_true",
+        help="Split long dialogue events before VOICEVOX synthesis.",
+    )
+    parser.add_argument(
+        "--dialogue-split-chars",
+        default=18,
+        type=int,
+        help="Target character count for splitting long dialogue events.",
+    )
+    parser.add_argument(
+        "--dialogue-split-min-chars",
+        default=6,
+        type=int,
+        help="Minimum character count for split dialogue fragments.",
+    )
     args = parser.parse_args(argv)
 
     return ScriptOptions(
@@ -583,6 +609,9 @@ def parse_args(argv: list[str] | None = None) -> ScriptOptions:
         voicevox_url=args.base_url,
         default_gap=args.gap,
         speaker_aliases=DEFAULT_SPEAKER_ALIASES.copy(),
+        split_long_dialogue=args.split_long_dialogue,
+        dialogue_split_chars=args.dialogue_split_chars,
+        dialogue_split_min_chars=args.dialogue_split_min_chars,
     )
 
 

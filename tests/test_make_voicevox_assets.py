@@ -1291,6 +1291,13 @@ def test_generate_voicevox_assets_calls_pipeline_functions_in_order(monkeypatch:
         calls.append(("parse_script", lines_arg, script_dir))
         return parsed_events
 
+    def fake_split_long_dialogue_events(
+        events: list[ScriptEvent],
+        max_chars: int,
+        min_chars: int,
+    ) -> list[ScriptEvent]:
+        raise AssertionError("split_long_dialogue_events should not be called by default")
+
     def fake_insert_gap_events(events: list[ScriptEvent], gap_sec: float) -> list[ScriptEvent]:
         calls.append(("insert_gap_events", events, gap_sec))
         return gapped_events
@@ -1326,6 +1333,7 @@ def test_generate_voicevox_assets_calls_pipeline_functions_in_order(monkeypatch:
 
     monkeypatch.setattr(make_voicevox_assets, "read_script_file", fake_read_script_file)
     monkeypatch.setattr(make_voicevox_assets, "parse_script", fake_parse_script)
+    monkeypatch.setattr(make_voicevox_assets, "split_long_dialogue_events", fake_split_long_dialogue_events)
     monkeypatch.setattr(make_voicevox_assets, "insert_gap_events", fake_insert_gap_events)
     monkeypatch.setattr(make_voicevox_assets, "fetch_voicevox_speakers", fake_fetch_voicevox_speakers)
     monkeypatch.setattr(make_voicevox_assets, "synthesize_dialogue_wavs", fake_synthesize_dialogue_wavs)
@@ -1355,6 +1363,203 @@ def test_generate_voicevox_assets_calls_pipeline_functions_in_order(monkeypatch:
         ("build_srt_cues", sound_effect_events),
         ("write_srt_file", options.srt_path, cues),
     ]
+
+
+def test_generate_voicevox_assets_applies_long_dialogue_split_before_gap(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    options = ScriptOptions(
+        script_path=tmp_path / "script.txt",
+        out_dir=tmp_path / "wav",
+        srt_path=tmp_path / "output.srt",
+        concat_path=tmp_path / "all.wav",
+        voicevox_url="http://127.0.0.1:50021",
+        default_gap=0.08,
+        split_long_dialogue=True,
+        dialogue_split_chars=12,
+        dialogue_split_min_chars=4,
+    )
+    silence = SilenceEvent(line_no=2, duration_sec=0.5, source="script")
+    sound_effect = SoundEffectEvent(line_no=4, path=tmp_path / "se.wav", params={})
+    parsed_events: list[ScriptEvent] = [
+        DialogueEvent(1, "metan", "short.", "short.", {}),
+        silence,
+        DialogueEvent(3, "zundamon", "alpha beta gamma delta", "alpha beta gamma delta", {"speed": "1.2"}),
+        sound_effect,
+        DialogueEvent(5, "metan", "one two three four", "display text", {}),
+    ]
+    expected_split_events: list[ScriptEvent] = [
+        parsed_events[0],
+        silence,
+        DialogueEvent(3, "zundamon", "alpha beta", "alpha beta", {"speed": "1.2"}),
+        DialogueEvent(3, "zundamon", "gamma delta", "gamma delta", {"speed": "1.2"}),
+        sound_effect,
+        parsed_events[4],
+    ]
+    speakers = [{"name": "dummy", "styles": [{"id": 2}]}]
+    wav_info = WavInfo(channels=1, sample_width=2, frame_rate=24000, frame_count=24000, duration_sec=1.0)
+    calls: list[tuple] = []
+
+    monkeypatch.setattr(make_voicevox_assets, "read_script_file", lambda script_path: ["metan: hello"])
+    monkeypatch.setattr(make_voicevox_assets, "parse_script", lambda lines, script_dir: parsed_events)
+
+    def fake_insert_gap_events(events: list[ScriptEvent], gap_sec: float) -> list[ScriptEvent]:
+        calls.append(("insert_gap_events", events, gap_sec))
+        return events
+
+    def fake_synthesize_dialogue_wavs(
+        events: list[ScriptEvent],
+        speakers_arg: list[dict],
+        base_url: str,
+        out_dir: Path,
+        aliases: dict[str, str],
+    ) -> list[ScriptEvent]:
+        calls.append(("synthesize_dialogue_wavs", events))
+        return events
+
+    monkeypatch.setattr(make_voicevox_assets, "insert_gap_events", fake_insert_gap_events)
+    monkeypatch.setattr(make_voicevox_assets, "fetch_voicevox_speakers", lambda base_url: speakers)
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_dialogue_wavs", fake_synthesize_dialogue_wavs)
+    monkeypatch.setattr(make_voicevox_assets, "attach_sound_effect_info", lambda events: events)
+    monkeypatch.setattr(make_voicevox_assets, "concatenate_wavs", lambda events, output_path: wav_info)
+    monkeypatch.setattr(make_voicevox_assets, "build_srt_cues", lambda events: [])
+    monkeypatch.setattr(make_voicevox_assets, "write_srt_file", lambda path, cues: None)
+
+    result = generate_voicevox_assets(options)
+
+    assert result is wav_info
+    assert calls == [
+        ("insert_gap_events", expected_split_events, 0.08),
+        ("synthesize_dialogue_wavs", expected_split_events),
+    ]
+    assert parsed_events[2] == DialogueEvent(
+        3,
+        "zundamon",
+        "alpha beta gamma delta",
+        "alpha beta gamma delta",
+        {"speed": "1.2"},
+    )
+
+
+def test_generate_voicevox_assets_passes_dialogue_split_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    options = ScriptOptions(
+        script_path=tmp_path / "script.txt",
+        out_dir=tmp_path / "wav",
+        srt_path=tmp_path / "output.srt",
+        concat_path=tmp_path / "all.wav",
+        split_long_dialogue=True,
+        dialogue_split_chars=24,
+        dialogue_split_min_chars=8,
+    )
+    parsed_events: list[ScriptEvent] = [DialogueEvent(1, "metan", "hello", "hello", {})]
+    split_events: list[ScriptEvent] = [DialogueEvent(1, "metan", "split", "split", {})]
+    captured_split_args: list[tuple[list[ScriptEvent], int, int]] = []
+    wav_info = WavInfo(channels=1, sample_width=2, frame_rate=24000, frame_count=24000, duration_sec=1.0)
+
+    def fake_split_long_dialogue_events(
+        events: list[ScriptEvent],
+        max_chars: int,
+        min_chars: int,
+    ) -> list[ScriptEvent]:
+        captured_split_args.append((events, max_chars, min_chars))
+        return split_events
+
+    monkeypatch.setattr(make_voicevox_assets, "read_script_file", lambda script_path: ["metan: hello"])
+    monkeypatch.setattr(make_voicevox_assets, "parse_script", lambda lines, script_dir: parsed_events)
+    monkeypatch.setattr(make_voicevox_assets, "split_long_dialogue_events", fake_split_long_dialogue_events)
+    monkeypatch.setattr(make_voicevox_assets, "insert_gap_events", lambda events, gap_sec: events)
+    monkeypatch.setattr(make_voicevox_assets, "fetch_voicevox_speakers", lambda base_url: [])
+    monkeypatch.setattr(make_voicevox_assets, "synthesize_dialogue_wavs", lambda events, speakers, base_url, out_dir, aliases: events)
+    monkeypatch.setattr(make_voicevox_assets, "attach_sound_effect_info", lambda events: events)
+    monkeypatch.setattr(make_voicevox_assets, "concatenate_wavs", lambda events, output_path: wav_info)
+    monkeypatch.setattr(make_voicevox_assets, "build_srt_cues", lambda events: [])
+    monkeypatch.setattr(make_voicevox_assets, "write_srt_file", lambda path, cues: None)
+
+    generate_voicevox_assets(options)
+
+    assert captured_split_args == [(parsed_events, 24, 8)]
+
+
+def test_generate_voicevox_assets_invalid_dialogue_split_values_raise(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(make_voicevox_assets, "read_script_file", lambda script_path: ["metan: hello"])
+    monkeypatch.setattr(
+        make_voicevox_assets,
+        "parse_script",
+        lambda lines, script_dir: [DialogueEvent(1, "metan", "hello", "hello", {})],
+    )
+
+    options = ScriptOptions(
+        script_path=tmp_path / "script.txt",
+        out_dir=tmp_path / "wav",
+        srt_path=tmp_path / "output.srt",
+        concat_path=tmp_path / "all.wav",
+        split_long_dialogue=True,
+        dialogue_split_chars=0,
+        dialogue_split_min_chars=0,
+    )
+
+    with pytest.raises(ValueError, match="max_chars"):
+        generate_voicevox_assets(options)
+
+    options.dialogue_split_chars = 10
+    options.dialogue_split_min_chars = -1
+    with pytest.raises(ValueError, match="min_chars"):
+        generate_voicevox_assets(options)
+
+    options.dialogue_split_chars = 5
+    options.dialogue_split_min_chars = 6
+    with pytest.raises(ValueError, match="min_chars"):
+        generate_voicevox_assets(options)
+
+
+def test_parse_args_sets_dialogue_split_defaults() -> None:
+    options = make_voicevox_assets.parse_args(
+        [
+            "--script",
+            "script.txt",
+            "--out_dir",
+            "wav",
+            "--srt",
+            "output.srt",
+            "--concat",
+            "all.wav",
+        ]
+    )
+
+    assert options.split_long_dialogue is False
+    assert options.dialogue_split_chars == 18
+    assert options.dialogue_split_min_chars == 6
+
+
+def test_parse_args_sets_dialogue_split_options() -> None:
+    options = make_voicevox_assets.parse_args(
+        [
+            "--script",
+            "script.txt",
+            "--out_dir",
+            "wav",
+            "--srt",
+            "output.srt",
+            "--concat",
+            "all.wav",
+            "--split-long-dialogue",
+            "--dialogue-split-chars",
+            "24",
+            "--dialogue-split-min-chars",
+            "8",
+        ]
+    )
+
+    assert options.split_long_dialogue is True
+    assert options.dialogue_split_chars == 24
+    assert options.dialogue_split_min_chars == 8
 
 
 def test_main_builds_script_options_and_returns_zero_on_success(
