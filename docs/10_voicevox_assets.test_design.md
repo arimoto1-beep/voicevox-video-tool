@@ -45,6 +45,16 @@
 | split_long_dialogue_event | `min_chars < 0` で `ValueError` になる | `test_split_long_dialogue_event_invalid_min_chars_raises` | 実装済み |
 | split_long_dialogue_event | `min_chars > max_chars` で `ValueError` になる | `test_split_long_dialogue_event_min_chars_greater_than_max_chars_raises` | 実装済み |
 | split_text_by_rules | 前後空白を取り除き、空断片を作らない | `test_split_text_by_rules_strips_parts_and_ignores_empty_parts` | 実装済み |
+| split_long_dialogue_events | 空のイベント列は空リストを返す | `test_split_long_dialogue_events_empty_list_returns_empty_list` | 実装済み |
+| split_long_dialogue_events | 短い `DialogueEvent` だけのイベント列は実質変わらない | `test_split_long_dialogue_events_keeps_short_dialogues` | 実装済み |
+| split_long_dialogue_events | イベント列内の長い `DialogueEvent` を分割する | `test_split_long_dialogue_events_splits_long_dialogue_in_event_list` | 実装済み |
+| split_long_dialogue_events | 複数の長い `DialogueEvent` をそれぞれ分割する | `test_split_long_dialogue_events_splits_multiple_long_dialogues` | 実装済み |
+| split_long_dialogue_events | 非Dialogueイベントを分割せず、SEや間イベントの順序を維持する | `test_split_long_dialogue_events_keeps_non_dialogue_events_and_order` | 実装済み |
+| split_long_dialogue_events | `voice_text` と `subtitle_text` が異なるイベントは分割しない | `test_split_long_dialogue_events_keeps_separated_voice_and_subtitle` | 実装済み |
+| split_long_dialogue_events | 元のイベント列と元イベントを変更しない | `test_split_long_dialogue_events_does_not_mutate_original_events` | 実装済み |
+| split_long_dialogue_events | `max_chars <= 0` で `ValueError` になる | `test_split_long_dialogue_events_invalid_max_chars_raises` | 実装済み |
+| split_long_dialogue_events | `min_chars < 0` で `ValueError` になる | `test_split_long_dialogue_events_invalid_min_chars_raises` | 実装済み |
+| split_long_dialogue_events | `min_chars > max_chars` で `ValueError` になる | `test_split_long_dialogue_events_min_chars_greater_than_max_chars_raises` | 実装済み |
 | read_wav_info | 正常なWAVファイルから `channels` / `sample_width` / `frame_rate` / `frame_count` / `duration_sec` を取得できる | `test_read_wav_info_reads_wav_format_info` | 実装済み |
 | read_wav_info | 存在しないファイルで `FileNotFoundError` になる | `test_read_wav_info_missing_file_raises_file_not_found` | 実装済み |
 | read_wav_info | WAVではないファイルで `ValueError` になる | `test_read_wav_info_non_wav_file_raises_value_error` | 実装済み |
@@ -140,5 +150,5 @@
 ## 5. 直近のpytest結果
 
 ```text
-97 passed
+107 passed
 ```

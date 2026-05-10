@@ -32,6 +32,7 @@ from make_voicevox_assets import (
     resolve_speaker_id,
     ScriptOptions,
     split_long_dialogue_event,
+    split_long_dialogue_events,
     split_text_by_rules,
     synthesize_dialogue_wav,
     synthesize_dialogue_wavs,
@@ -407,6 +408,108 @@ def test_split_long_dialogue_event_min_chars_greater_than_max_chars_raises() -> 
 
 def test_split_text_by_rules_strips_parts_and_ignores_empty_parts() -> None:
     assert split_text_by_rules("  A B C D  ", max_chars=4, min_chars=1) == ["A B", "C D"]
+
+
+def test_split_long_dialogue_events_empty_list_returns_empty_list() -> None:
+    assert split_long_dialogue_events([], max_chars=10, min_chars=3) == []
+
+
+def test_split_long_dialogue_events_keeps_short_dialogues() -> None:
+    first = DialogueEvent(1, "metan", "short.", "short.", {})
+    second = DialogueEvent(2, "zundamon", "also short.", "also short.", {})
+
+    result = split_long_dialogue_events([first, second], max_chars=20, min_chars=3)
+
+    assert result == [first, second]
+
+
+def test_split_long_dialogue_events_splits_long_dialogue_in_event_list() -> None:
+    first = DialogueEvent(1, "metan", "short.", "short.", {})
+    long = DialogueEvent(2, "zundamon", "alpha beta gamma delta", "alpha beta gamma delta", {"speed": "1.2"})
+    last = DialogueEvent(3, "metan", "done.", "done.", {})
+
+    result = split_long_dialogue_events([first, long, last], max_chars=12, min_chars=4)
+
+    assert [event.voice_text for event in result if isinstance(event, DialogueEvent)] == [
+        "short.",
+        "alpha beta",
+        "gamma delta",
+        "done.",
+    ]
+    assert result[1].speaker == "zundamon"
+    assert result[1].params == {"speed": "1.2"}
+
+
+def test_split_long_dialogue_events_splits_multiple_long_dialogues() -> None:
+    first = DialogueEvent(1, "metan", "alpha beta gamma delta", "alpha beta gamma delta", {})
+    second = DialogueEvent(2, "zundamon", "one two three four", "one two three four", {})
+
+    result = split_long_dialogue_events([first, second], max_chars=12, min_chars=3)
+
+    assert [event.voice_text for event in result if isinstance(event, DialogueEvent)] == [
+        "alpha beta",
+        "gamma delta",
+        "one two",
+        "three four",
+    ]
+
+
+def test_split_long_dialogue_events_keeps_non_dialogue_events_and_order(tmp_path: Path) -> None:
+    first = DialogueEvent(1, "metan", "short.", "short.", {})
+    silence = SilenceEvent(line_no=2, duration_sec=0.5, source="script")
+    long = DialogueEvent(3, "zundamon", "alpha beta gamma delta", "alpha beta gamma delta", {})
+    sound_effect = SoundEffectEvent(line_no=4, path=tmp_path / "se.wav", params={})
+    last = DialogueEvent(5, "metan", "done.", "done.", {})
+
+    result = split_long_dialogue_events([first, silence, long, sound_effect, last], max_chars=12, min_chars=4)
+
+    assert result == [
+        first,
+        silence,
+        DialogueEvent(3, "zundamon", "alpha beta", "alpha beta", {}),
+        DialogueEvent(3, "zundamon", "gamma delta", "gamma delta", {}),
+        sound_effect,
+        last,
+    ]
+
+
+def test_split_long_dialogue_events_keeps_separated_voice_and_subtitle() -> None:
+    event = DialogueEvent(1, "metan", "alpha beta gamma delta", "display text", {})
+
+    result = split_long_dialogue_events([event], max_chars=12, min_chars=4)
+
+    assert result == [event]
+
+
+def test_split_long_dialogue_events_does_not_mutate_original_events(tmp_path: Path) -> None:
+    first = DialogueEvent(1, "metan", "alpha beta gamma delta", "alpha beta gamma delta", {"speed": "1.1"})
+    silence = SilenceEvent(line_no=2, duration_sec=0.5, source="script")
+    sound_effect = SoundEffectEvent(line_no=3, path=tmp_path / "se.wav", params={"volume": "0.8"})
+    events: list[ScriptEvent] = [first, silence, sound_effect]
+    original = [
+        DialogueEvent(1, "metan", "alpha beta gamma delta", "alpha beta gamma delta", {"speed": "1.1"}),
+        SilenceEvent(line_no=2, duration_sec=0.5, source="script"),
+        SoundEffectEvent(line_no=3, path=tmp_path / "se.wav", params={"volume": "0.8"}),
+    ]
+
+    split_long_dialogue_events(events, max_chars=12, min_chars=4)
+
+    assert events == original
+
+
+def test_split_long_dialogue_events_invalid_max_chars_raises() -> None:
+    with pytest.raises(ValueError, match="max_chars"):
+        split_long_dialogue_events([], max_chars=0, min_chars=0)
+
+
+def test_split_long_dialogue_events_invalid_min_chars_raises() -> None:
+    with pytest.raises(ValueError, match="min_chars"):
+        split_long_dialogue_events([], max_chars=10, min_chars=-1)
+
+
+def test_split_long_dialogue_events_min_chars_greater_than_max_chars_raises() -> None:
+    with pytest.raises(ValueError, match="min_chars"):
+        split_long_dialogue_events([], max_chars=5, min_chars=6)
 
 
 def test_read_wav_info_reads_wav_format_info(tmp_path: Path) -> None:

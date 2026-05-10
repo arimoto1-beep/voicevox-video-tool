@@ -179,6 +179,28 @@ def split_long_dialogue_event(
     ]
 
 
+def split_long_dialogue_events(
+    events: list[ScriptEvent],
+    max_chars: int,
+    min_chars: int,
+) -> list[ScriptEvent]:
+    """Apply long dialogue splitting to a whole script event list."""
+    if max_chars <= 0:
+        raise ValueError(f"max_chars 縺ｯ1莉･荳翫〒謖・ｮ壹＠縺ｦ縺上□縺輔＞: {max_chars}")
+    if min_chars < 0:
+        raise ValueError(f"min_chars 縺ｯ0莉･荳翫〒謖・ｮ壹＠縺ｦ縺上□縺輔＞: {min_chars}")
+    if min_chars > max_chars:
+        raise ValueError(f"min_chars 縺ｯ max_chars 莉･荳九〒謖・ｮ壹＠縺ｦ縺上□縺輔＞: {min_chars}")
+
+    result: list[ScriptEvent] = []
+    for event in events:
+        if isinstance(event, DialogueEvent):
+            result.extend(split_long_dialogue_event(event, max_chars=max_chars, min_chars=min_chars))
+        else:
+            result.append(event)
+    return result
+
+
 def split_text_by_rules(text: str, max_chars: int, min_chars: int) -> list[str]:
     """Split text by Japanese punctuation first, falling back to character count."""
     if max_chars <= 0:

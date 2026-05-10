@@ -149,6 +149,20 @@ CLIおよび `generate_voicevox_assets` に渡す実行オプション。
   - 分割後の `wav_path` と `duration_sec` は未生成状態として `None` にする。
 - テスト方針: 短文、句点、読点、感嘆符・疑問符、スペース、文字数分割、短すぎる断片の回避、話者・パラメータ維持、字幕分離時の非分割、不正値を確認する。
 
+### split_long_dialogue_events
+
+`split_long_dialogue_events(events: list[ScriptEvent], max_chars: int, min_chars: int) -> list[ScriptEvent]`
+
+- 役割: イベント列全体に対して、長い `DialogueEvent` の分割を適用する。
+- 入力: `DialogueEvent`、`SilenceEvent`、`SoundEffectEvent` を含むイベント列、目安文字数、最小文字数。
+- 出力: `DialogueEvent` だけを必要に応じて分割したイベント列。
+- `DialogueEvent` は `split_long_dialogue_event` に渡す。
+- `SilenceEvent` と `SoundEffectEvent` は分割せず、そのまま順序を維持する。
+- 元のイベント列と元イベントは変更しない。
+- 現時点ではCLIや既存の音声生成パイプラインには接続しない。
+- 主なエラー: `max_chars <= 0`、`min_chars < 0`、`min_chars > max_chars`。
+- テスト方針: 空リスト、短いセリフ、長いセリフ、複数の長いセリフ、非Dialogueイベントの保持、順序維持、メタ情報維持、不正値を確認する。
+
 ### split_text_by_rules
 
 `split_text_by_rules(text: str, max_chars: int, min_chars: int) -> list[str]`
