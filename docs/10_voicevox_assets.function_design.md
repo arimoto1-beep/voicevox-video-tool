@@ -131,6 +131,35 @@ CLIおよび `generate_voicevox_assets` に渡す実行オプション。
 - 外部依存: なし。
 - テスト方針: 連続セリフ間の挿入、非セリフを挟む場合、0秒、空リスト、単一イベント、負数を確認する。
 
+### split_long_dialogue_event
+
+`split_long_dialogue_event(event: DialogueEvent, max_chars: int, min_chars: int) -> list[DialogueEvent]`
+
+- 役割: 1つの長い `DialogueEvent` を、VOICEVOX投入前に短い `DialogueEvent` へ分割する。
+- 入力: セリフイベント、目安文字数、最小文字数。
+- 出力: 分割後の `DialogueEvent` リスト。分割不要なら元イベントだけのリスト。
+- 主なエラー: `max_chars <= 0`, `min_chars < 0`, `min_chars > max_chars`。
+- 外部依存: なし。
+- 仕様:
+  - `voice_text` と `subtitle_text` が異なるイベントは自動分割しない。
+  - `voice_text` の長さが `max_chars` 以下なら分割しない。
+  - 句点、読点、感嘆符・疑問符、スペースの順に区切り候補を探す。
+  - 候補がない場合は文字数で分割する。
+  - 分割後も `line_no`, `speaker`, `params` を引き継ぐ。
+  - 分割後の `wav_path` と `duration_sec` は未生成状態として `None` にする。
+- テスト方針: 短文、句点、読点、感嘆符・疑問符、スペース、文字数分割、短すぎる断片の回避、話者・パラメータ維持、字幕分離時の非分割、不正値を確認する。
+
+### split_text_by_rules
+
+`split_text_by_rules(text: str, max_chars: int, min_chars: int) -> list[str]`
+
+- 役割: `split_long_dialogue_event` から使う文字列分割の補助関数。
+- 入力: 分割対象文字列、目安文字数、最小文字数。
+- 出力: 分割済み文字列リスト。
+- 主なエラー: `split_long_dialogue_event` と同じ。
+- 外部依存: なし。
+- テスト方針: 外部仕様は主に `split_long_dialogue_event` で確認し、必要な境界条件だけ補助関数で確認する。
+
 ### read_wav_info
 
 `read_wav_info(path: Path) -> WavInfo`

@@ -10,6 +10,8 @@
 
 本仕様書では、ASS側だけで字幕を分割するのではなく、VOICEVOXに投げる前に長い `DialogueEvent` を短い `DialogueEvent` へ分割する方針を整理する。
 
+現時点では、最初の実装として単体の `DialogueEvent` を分割する `split_long_dialogue_event` を追加している。ただし、CLI引数や既存の音声生成パイプラインへの組み込みはまだ行っていない。
+
 ## 2. なぜASS側の折り返しだけでは不十分か
 
 `--ass-wrap-chars` / `--ass-max-lines` は、1つの字幕を2行程度に収めたい場合には有効である。短めの字幕であれば、ASS本文に `\N` を入れるだけで画面内に収まりやすくなる。
@@ -175,11 +177,18 @@ WAV連結 / SRT生成
 
 短期的な推奨方針としては、読み上げと字幕が同一の `DialogueEvent` だけを、VOICEVOX投入前にルールベースで分割する。
 
-## 9. 今回まだ実装しないこと
+## 9. 今回の実装範囲
 
-今回は方針整理のみであり、以下は実装しない。
+今回実装したこと:
 
-- `DialogueEvent` 分割の実装
+- `split_long_dialogue_event(event, max_chars, min_chars) -> list[DialogueEvent]`
+- `split_text_by_rules(text, max_chars, min_chars) -> list[str]`
+- 単体の `DialogueEvent` 分割ロジック
+- 読み上げと字幕が異なる `DialogueEvent` を自動分割対象外にする挙動
+- 話者、行番号、個別パラメータを分割後イベントへ引き継ぐ挙動
+
+まだ実装しないこと:
+
 - CLI引数追加
 - 自然言語処理による高精度分割
 - 文字幅ベースの分割
@@ -193,13 +202,7 @@ WAV連結 / SRT生成
 
 ## 10. 次に実装するなら
 
-次に実装するなら、最小実装として以下のどちらかを検討する。
-
-```python
-split_long_dialogue_event(event, max_chars, min_chars) -> list[DialogueEvent]
-```
-
-または、
+次に実装するなら、イベント列全体に適用する以下の関数を検討する。
 
 ```python
 split_long_dialogue_events(events, max_chars, min_chars) -> list[BaseEvent]
@@ -216,11 +219,11 @@ split_long_dialogue_events(events, max_chars, min_chars) -> list[BaseEvent]
 - イベント順序を維持する。
 - 分割後のイベント列を、既存の音声生成・SRT生成パイプラインに渡す。
 
-最初の実装としては、単体の `DialogueEvent` を分割する `split_long_dialogue_event` から始めるとテストしやすい。その後、イベント列全体に適用する `split_long_dialogue_events` を追加するのがよい。
+単体の `DialogueEvent` 分割は実装済みのため、次の段階では `SilenceEvent` や `SoundEffectEvent` を含むイベント列の順序を保ったまま、`DialogueEvent` だけに分割処理を適用する。
 
 ## 11. テスト方針
 
-将来実装する場合のテスト観点を整理する。
+実装済み、または将来実装する場合のテスト観点を整理する。
 
 - 短い `DialogueEvent` は分割されないこと。
 - 長い `DialogueEvent` が句点で分割されること。
@@ -235,6 +238,7 @@ split_long_dialogue_events(events, max_chars, min_chars) -> list[BaseEvent]
 - SEや間イベントの位置が維持されること。
 - イベント順序が維持されること。
 - 読み上げ `||` 字幕の分離があるイベントは、自動分割対象外にすること。
+- 将来の `split_long_dialogue_events` では、イベント列全体に適用しても順序が維持されること。
 
 ## 12. 短期的な推奨方針
 

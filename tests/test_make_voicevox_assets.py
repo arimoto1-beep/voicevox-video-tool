@@ -31,6 +31,8 @@ from make_voicevox_assets import (
     read_script_file,
     resolve_speaker_id,
     ScriptOptions,
+    split_long_dialogue_event,
+    split_text_by_rules,
     synthesize_dialogue_wav,
     synthesize_dialogue_wavs,
     synthesize_wav,
@@ -282,6 +284,129 @@ def test_insert_gap_events_negative_gap_raises() -> None:
 
     with pytest.raises(ValueError):
         insert_gap_events(events, -0.1)
+
+
+def test_split_long_dialogue_event_keeps_short_dialogue() -> None:
+    event = DialogueEvent(1, "めたん", "こんにちは。", "こんにちは。", {"speed": "1.1"})
+
+    assert split_long_dialogue_event(event, max_chars=20, min_chars=6) == [event]
+
+
+def test_split_long_dialogue_event_splits_by_period() -> None:
+    event = DialogueEvent(1, "めたん", "設計します。実装します。テストします。", "設計します。実装します。テストします。", {})
+
+    result = split_long_dialogue_event(event, max_chars=8, min_chars=5)
+
+    assert [item.voice_text for item in result] == ["設計します。", "実装します。", "テストします。"]
+    assert [item.subtitle_text for item in result] == ["設計します。", "実装します。", "テストします。"]
+
+
+def test_split_long_dialogue_event_splits_by_comma_when_no_period_before_limit() -> None:
+    event = DialogueEvent(
+        1,
+        "めたん",
+        "設計書を作って、実装して、テストして、実際に動画で確認したの。",
+        "設計書を作って、実装して、テストして、実際に動画で確認したの。",
+        {},
+    )
+
+    result = split_long_dialogue_event(event, max_chars=10, min_chars=6)
+
+    assert [item.voice_text for item in result] == ["設計書を作って、", "実装して、テストして、", "実際に動画で確認したの。"]
+
+
+def test_split_long_dialogue_event_splits_by_exclamation_or_question() -> None:
+    event = DialogueEvent(1, "ずんだもん", "まず確認するのだ！次に直すのだ？最後に試すのだ", "まず確認するのだ！次に直すのだ？最後に試すのだ", {})
+
+    result = split_long_dialogue_event(event, max_chars=12, min_chars=5)
+
+    assert [item.voice_text for item in result] == ["まず確認するのだ！", "次に直すのだ？", "最後に試すのだ"]
+
+
+def test_split_long_dialogue_event_splits_by_space() -> None:
+    event = DialogueEvent(1, "めたん", "alpha beta gamma delta", "alpha beta gamma delta", {})
+
+    result = split_long_dialogue_event(event, max_chars=12, min_chars=4)
+
+    assert [item.voice_text for item in result] == ["alpha beta", "gamma delta"]
+
+
+def test_split_long_dialogue_event_falls_back_to_character_count() -> None:
+    event = DialogueEvent(
+        1,
+        "ずんだもん",
+        "これはとてもながいせりふなのでどこかでわけるひつようがあります",
+        "これはとてもながいせりふなのでどこかでわけるひつようがあります",
+        {},
+    )
+
+    result = split_long_dialogue_event(event, max_chars=12, min_chars=5)
+
+    assert [item.voice_text for item in result] == [
+        "これはとてもながいせりふ",
+        "なのでどこかでわけるひつ",
+        "ようがあります",
+    ]
+
+
+def test_split_long_dialogue_event_avoids_too_short_trailing_fragment() -> None:
+    event = DialogueEvent(1, "めたん", "1234567890123", "1234567890123", {})
+
+    result = split_long_dialogue_event(event, max_chars=10, min_chars=5)
+
+    assert result == [event]
+
+
+def test_split_long_dialogue_event_preserves_speaker_params_and_line_no() -> None:
+    event = DialogueEvent(7, "めたん", "設計します。実装します。", "設計します。実装します。", {"speed": "1.2"})
+
+    result = split_long_dialogue_event(event, max_chars=8, min_chars=4)
+
+    assert [(item.line_no, item.speaker, item.params) for item in result] == [
+        (7, "めたん", {"speed": "1.2"}),
+        (7, "めたん", {"speed": "1.2"}),
+    ]
+    assert result[0].params is not event.params
+
+
+def test_split_long_dialogue_event_keeps_separated_voice_and_subtitle() -> None:
+    event = DialogueEvent(1, "めたん", "こんにちはなのです。これは長い読み上げなのです。", "こんにちは。", {})
+
+    assert split_long_dialogue_event(event, max_chars=8, min_chars=4) == [event]
+
+
+def test_split_long_dialogue_event_does_not_mutate_original_event() -> None:
+    event = DialogueEvent(1, "めたん", "設計します。実装します。", "設計します。実装します。", {"speed": "1.2"})
+    original = DialogueEvent(1, "めたん", "設計します。実装します。", "設計します。実装します。", {"speed": "1.2"})
+
+    split_long_dialogue_event(event, max_chars=8, min_chars=4)
+
+    assert event == original
+
+
+def test_split_long_dialogue_event_invalid_max_chars_raises() -> None:
+    event = DialogueEvent(1, "めたん", "こんにちは。", "こんにちは。", {})
+
+    with pytest.raises(ValueError, match="max_chars"):
+        split_long_dialogue_event(event, max_chars=0, min_chars=0)
+
+
+def test_split_long_dialogue_event_invalid_min_chars_raises() -> None:
+    event = DialogueEvent(1, "めたん", "こんにちは。", "こんにちは。", {})
+
+    with pytest.raises(ValueError, match="min_chars"):
+        split_long_dialogue_event(event, max_chars=10, min_chars=-1)
+
+
+def test_split_long_dialogue_event_min_chars_greater_than_max_chars_raises() -> None:
+    event = DialogueEvent(1, "めたん", "こんにちは。", "こんにちは。", {})
+
+    with pytest.raises(ValueError, match="min_chars"):
+        split_long_dialogue_event(event, max_chars=5, min_chars=6)
+
+
+def test_split_text_by_rules_strips_parts_and_ignores_empty_parts() -> None:
+    assert split_text_by_rules("  A B C D  ", max_chars=4, min_chars=1) == ["A B", "C D"]
 
 
 def test_read_wav_info_reads_wav_format_info(tmp_path: Path) -> None:

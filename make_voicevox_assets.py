@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeAlias
 import argparse
@@ -144,6 +144,74 @@ def insert_gap_events(events: list[ScriptEvent], gap_sec: float) -> list[ScriptE
         result.append(events[-1])
 
     return result
+
+
+def split_long_dialogue_event(
+    event: DialogueEvent,
+    max_chars: int,
+    min_chars: int,
+) -> list[DialogueEvent]:
+    """Split one long dialogue before synthesis while preserving dialogue metadata."""
+    if max_chars <= 0:
+        raise ValueError(f"max_chars は1以上で指定してください: {max_chars}")
+    if min_chars < 0:
+        raise ValueError(f"min_chars は0以上で指定してください: {min_chars}")
+    if min_chars > max_chars:
+        raise ValueError(f"min_chars は max_chars 以下で指定してください: {min_chars}")
+
+    if event.voice_text != event.subtitle_text:
+        return [event]
+
+    parts = split_text_by_rules(event.voice_text, max_chars=max_chars, min_chars=min_chars)
+    if len(parts) <= 1:
+        return [event]
+
+    return [
+        replace(
+            event,
+            voice_text=part,
+            subtitle_text=part,
+            params=event.params.copy(),
+            wav_path=None,
+            duration_sec=None,
+        )
+        for part in parts
+    ]
+
+
+def split_text_by_rules(text: str, max_chars: int, min_chars: int) -> list[str]:
+    """Split text by Japanese punctuation first, falling back to character count."""
+    if max_chars <= 0:
+        raise ValueError(f"max_chars は1以上で指定してください: {max_chars}")
+    if min_chars < 0:
+        raise ValueError(f"min_chars は0以上で指定してください: {min_chars}")
+    if min_chars > max_chars:
+        raise ValueError(f"min_chars は max_chars 以下で指定してください: {min_chars}")
+
+    remaining = text.strip()
+    if len(remaining) <= max_chars:
+        return [remaining] if remaining else []
+
+    parts: list[str] = []
+    while len(remaining) > max_chars:
+        split_index = _find_split_index(remaining, max_chars=max_chars, min_chars=min_chars)
+        if split_index is None:
+            split_index = max_chars
+
+        part = remaining[:split_index].strip()
+        rest = remaining[split_index:].strip()
+        if not part:
+            break
+        if rest and len(rest) < min_chars:
+            break
+
+        parts.append(part)
+        remaining = rest
+
+    if remaining:
+        parts.append(remaining)
+
+    return parts
 
 
 def read_wav_info(path: Path) -> WavInfo:
@@ -523,6 +591,47 @@ def _sanitize_filename_part(value: str, *, fallback: str, max_length: int) -> st
     if not safe:
         safe = fallback
     return safe[:max_length].rstrip("._ ") or fallback
+
+
+def _find_split_index(text: str, *, max_chars: int, min_chars: int) -> int | None:
+    for separators in ("。", "、", "！？", " 　"):
+        index = _find_separator_before_limit(text, separators, max_chars=max_chars, min_chars=min_chars)
+        if index is not None:
+            return index
+
+    for separators in ("。", "、", "！？", " 　"):
+        index = _find_separator_after_limit(text, separators, max_chars=max_chars, min_chars=min_chars)
+        if index is not None:
+            return index
+
+    return None
+
+
+def _find_separator_before_limit(text: str, separators: str, *, max_chars: int, min_chars: int) -> int | None:
+    for index in range(min(max_chars, len(text)) - 1, min_chars - 2, -1):
+        if text[index] in separators:
+            split_index = index + 1
+            if _is_valid_split(text, split_index, min_chars=min_chars):
+                return split_index
+    return None
+
+
+def _find_separator_after_limit(text: str, separators: str, *, max_chars: int, min_chars: int) -> int | None:
+    search_limit = min(len(text), max_chars + min_chars)
+    for index in range(max_chars, search_limit):
+        if text[index] in separators:
+            split_index = index + 1
+            if _is_valid_split(text, split_index, min_chars=min_chars):
+                return split_index
+    return None
+
+
+def _is_valid_split(text: str, split_index: int, *, min_chars: int) -> bool:
+    left = text[:split_index].strip()
+    right = text[split_index:].strip()
+    if not left or not right:
+        return False
+    return len(left) >= min_chars and len(right) >= min_chars
 
 
 def _find_base_wav_format(events: list[ScriptEvent]) -> WavInfo:

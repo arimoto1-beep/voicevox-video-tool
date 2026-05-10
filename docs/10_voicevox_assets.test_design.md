@@ -31,6 +31,20 @@
 | insert_gap_events | 空のイベント列に対して空リストを返す | `test_insert_gap_events_empty_list_returns_empty_list` | 実装済み（追加検討から移動） |
 | insert_gap_events | イベントが1件だけの場合にgapを挿入しない | `test_insert_gap_events_single_event_does_not_insert_gap` | 実装済み（追加検討から移動） |
 | insert_gap_events | `gap_sec` が負数なら `ValueError` になる | `test_insert_gap_events_negative_gap_raises` | 実装済み |
+| split_long_dialogue_event | 短い `DialogueEvent` は分割しない | `test_split_long_dialogue_event_keeps_short_dialogue` | 実装済み |
+| split_long_dialogue_event | 長い `DialogueEvent` を句点で分割する | `test_split_long_dialogue_event_splits_by_period` | 実装済み |
+| split_long_dialogue_event | 句点がない場合に読点で分割する | `test_split_long_dialogue_event_splits_by_comma_when_no_period_before_limit` | 実装済み |
+| split_long_dialogue_event | 感嘆符・疑問符で分割する | `test_split_long_dialogue_event_splits_by_exclamation_or_question` | 実装済み |
+| split_long_dialogue_event | スペースで分割する | `test_split_long_dialogue_event_splits_by_space` | 実装済み |
+| split_long_dialogue_event | 区切り候補がない場合に文字数で分割する | `test_split_long_dialogue_event_falls_back_to_character_count` | 実装済み |
+| split_long_dialogue_event | 短すぎる末尾断片をできるだけ作らない | `test_split_long_dialogue_event_avoids_too_short_trailing_fragment` | 実装済み |
+| split_long_dialogue_event | 話者、行番号、パラメータを維持する | `test_split_long_dialogue_event_preserves_speaker_params_and_line_no` | 実装済み |
+| split_long_dialogue_event | `voice_text` と `subtitle_text` が異なる場合は分割しない | `test_split_long_dialogue_event_keeps_separated_voice_and_subtitle` | 実装済み |
+| split_long_dialogue_event | 元の `DialogueEvent` を変更しない | `test_split_long_dialogue_event_does_not_mutate_original_event` | 実装済み |
+| split_long_dialogue_event | `max_chars <= 0` で `ValueError` になる | `test_split_long_dialogue_event_invalid_max_chars_raises` | 実装済み |
+| split_long_dialogue_event | `min_chars < 0` で `ValueError` になる | `test_split_long_dialogue_event_invalid_min_chars_raises` | 実装済み |
+| split_long_dialogue_event | `min_chars > max_chars` で `ValueError` になる | `test_split_long_dialogue_event_min_chars_greater_than_max_chars_raises` | 実装済み |
+| split_text_by_rules | 前後空白を取り除き、空断片を作らない | `test_split_text_by_rules_strips_parts_and_ignores_empty_parts` | 実装済み |
 | read_wav_info | 正常なWAVファイルから `channels` / `sample_width` / `frame_rate` / `frame_count` / `duration_sec` を取得できる | `test_read_wav_info_reads_wav_format_info` | 実装済み |
 | read_wav_info | 存在しないファイルで `FileNotFoundError` になる | `test_read_wav_info_missing_file_raises_file_not_found` | 実装済み |
 | read_wav_info | WAVではないファイルで `ValueError` になる | `test_read_wav_info_non_wav_file_raises_value_error` | 実装済み |
@@ -126,5 +140,5 @@
 ## 5. 直近のpytest結果
 
 ```text
-83 passed in 0.26s
+97 passed
 ```
